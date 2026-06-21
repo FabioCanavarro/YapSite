@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@theme {
+  --color-base: #1e1e2e;
+  --color-surface: #313244;
+  --color-text: #cdd6f4;
+  
+  /* Mood Colors */
+  --color-stressed: #f38ba8;    /* Red */
+  --color-calm: #74c7ec;        /* Sapphire */
+  --color-productive: #a6e3a1;  /* Green */
+  --color-hype: #cba6f7;        /* Mauve */
+  
+  /* Catppuccin accents */
+  --color-mantle: #181825;
+  --color-crust: #11111b;
+  --color-overlay: #6c7086;
+  --color-lavender: #b4befe;
+  --color-blue: #89b4fa;
+  --color-peach: #fab387;
+  --color-yellow: #f9e2af;
+  
+  --font-sans: var(--font-outfit), var(--font-geist-sans), ui-sans-serif, system-ui;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular;
+}
+
+:root {
+  --background: #1e1e2e;
+  --foreground: #cdd6f4;
+}
+
+body {
+  background-color: #1e1e2e;
+  color: #cdd6f4;
+  overflow-x: hidden;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Custom premium scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #181825;
+}
+::-webkit-scrollbar-thumb {
+  background: #313244;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6c7086;
+}
+
+/* Audio visualizer breathing state */
+@keyframes breathing {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.15;
+    filter: blur(40px);
+  }
+  50% {
+    transform: scale(1.18);
+    opacity: 0.35;
+    filter: blur(60px);
+  }
+}
+
+.breathing-pulse {
+  animation: breathing 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Custom Glassmorphism utility */
+.glass-panel {
+  background: rgba(49, 50, 68, 0.4);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(205, 214, 244, 0.08);
+}
+
+.glass-panel-hover:hover {
+  background: rgba(49, 50, 68, 0.6);
+  border: 1px solid rgba(205, 214, 244, 0.15);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}

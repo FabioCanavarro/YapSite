@@ -1,0 +1,18 @@
+{
+  "name": "YapSite Journal",
+  "short_name": "YapSite",
+  "description": "Premium Offline-First Multimodal Voice Journaling Application",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1e2e",
+  "theme_color": "#1e1e2e",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
