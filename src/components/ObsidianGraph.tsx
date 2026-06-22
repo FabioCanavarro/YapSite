@@ -47,6 +47,12 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
   const [dimensions, setDimensions] = useState({ width: 800, height: 550 });
+  const [dpr, setDpr] = useState(1);
+
+  // Set device pixel ratio on client mount
+  useEffect(() => {
+    setDpr(window.devicePixelRatio || 1);
+  }, []);
 
   // Stable physics params
   const charge = -150; // Repulsion force charge coefficient
@@ -59,6 +65,12 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
   const hoverNodeRef = useRef<Node | null>(null);
   const isPanningRef = useRef(false);
   const panStartRef = useRef({ x: 0, y: 0 });
+  const pinchStartDistRef = useRef(0);
+  const pinchStartScaleRef = useRef(1);
+
+  // Touch specific references
+  const lastTouchTimeRef = useRef<number>(0);
+  const lastTouchedNodeIdRef = useRef<string | null>(null);
 
   // Construct Nodes and Links dynamically
   const { nodes, links } = useMemo(() => {
@@ -299,10 +311,11 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         }
       }
 
-      // 6. Draw graph
-      ctx.clearRect(0, 0, dimensions.width, dimensions.height);
+      // 6. Draw graph with high-DPI device scaling for crisp retina display
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
+      ctx.scale(dpr, dpr); // scale coordinate system by device pixel ratio
       ctx.translate(panX, panY);
       ctx.scale(scale, scale);
 
@@ -401,7 +414,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [links, panX, panY, scale, dimensions, charge, gravity, linkStrength]);
+  }, [links, panX, panY, scale, dimensions, charge, gravity, linkStrength, dpr]);
 
   // Coordinates transforms
   const screenToWorld = (sx: number, sy: number) => {
@@ -418,6 +431,16 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     return {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
+    };
+  };
+
+  const getTouchCoordinates = (touch: React.Touch | Touch) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: touch.clientX - rect.left,
+      y: touch.clientY - rect.top,
     };
   };
 
@@ -499,6 +522,118 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     const zoomFactor = 1.08;
     const newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
     setScale(Math.max(0.25, Math.min(newScale, 3.0)));
+  };
+
+  // Touch Handlers
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      const screenCoords = getTouchCoordinates(touch);
+      const worldCoords = screenToWorld(screenCoords.x, screenCoords.y);
+
+      // Wider hit radius for touch (radius + 18)
+      const hitNode = nodesRef.current.find((node) => {
+        const dx = node.x - worldCoords.x;
+        const dy = node.y - worldCoords.y;
+        return Math.sqrt(dx * dx + dy * dy) <= node.radius + 18;
+      });
+
+      if (hitNode) {
+        // Track double tap
+        const now = Date.now();
+        const timeDiff = now - lastTouchTimeRef.current;
+        if (lastTouchedNodeIdRef.current === hitNode.id && timeDiff < 300) {
+          if (hitNode.type === "journal" && hitNode.journalId) {
+            router.push(`/journal/${hitNode.journalId}`);
+          }
+          // Reset
+          lastTouchTimeRef.current = 0;
+          lastTouchedNodeIdRef.current = null;
+          return;
+        }
+        lastTouchTimeRef.current = now;
+        lastTouchedNodeIdRef.current = hitNode.id;
+
+        dragNodeRef.current = hitNode;
+        hitNode.fx = hitNode.x;
+        hitNode.fy = hitNode.y;
+        hoverNodeRef.current = hitNode;
+      } else {
+        isPanningRef.current = true;
+        panStartRef.current = { x: touch.clientX, y: touch.clientY };
+        hoverNodeRef.current = null;
+      }
+    } else if (e.touches.length === 2) {
+      // Pinch start
+      isPanningRef.current = false;
+      dragNodeRef.current = null;
+      
+      const touch1 = e.touches[0];
+      const touch2 = e.touches[1];
+      const dx = touch1.clientX - touch2.clientX;
+      const dy = touch1.clientY - touch2.clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      pinchStartDistRef.current = dist;
+      pinchStartScaleRef.current = scale;
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+    if (e.touches.length === 1) {
+      const touch = e.touches[0];
+      const screenCoords = getTouchCoordinates(touch);
+      const worldCoords = screenToWorld(screenCoords.x, screenCoords.y);
+
+      if (dragNodeRef.current) {
+        dragNodeRef.current.fx = worldCoords.x;
+        dragNodeRef.current.fy = worldCoords.y;
+        return;
+      }
+
+      if (isPanningRef.current) {
+        const dx = touch.clientX - panStartRef.current.x;
+        const dy = touch.clientY - panStartRef.current.y;
+        setPanX((prev) => prev + dx);
+        setPanY((prev) => prev + dy);
+        panStartRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    } else if (e.touches.length === 2) {
+      // Pinch to zoom
+      const touch1 = e.touches[0];
+      const touch2 = e.touches[1];
+      const dx = touch1.clientX - touch2.clientX;
+      const dy = touch1.clientY - touch2.clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (pinchStartDistRef.current > 0) {
+        const factor = dist / pinchStartDistRef.current;
+        const newScale = pinchStartScaleRef.current * factor;
+        setScale(Math.max(0.25, Math.min(newScale, 3.0)));
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    if (e.cancelable) {
+      e.preventDefault();
+    }
+    if (dragNodeRef.current) {
+      dragNodeRef.current.fx = null;
+      dragNodeRef.current.fy = null;
+      dragNodeRef.current = null;
+    }
+    isPanningRef.current = false;
+    pinchStartDistRef.current = 0;
   };
 
   const zoomIn = () => setScale((prev) => Math.min(prev * 1.2, 3.0));
@@ -594,15 +729,20 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
       {/* Canvas */}
       <canvas
         ref={canvasRef}
-        width={dimensions.width}
-        height={dimensions.height}
+        width={dimensions.width * dpr}
+        height={dimensions.height * dpr}
+        style={{ width: "100%", height: `${dimensions.height}px` }}
         onMouseMove={handleMouseMove}
         onMouseDown={handleMouseDown}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onDoubleClick={handleDoubleClick}
         onWheel={handleWheel}
-        className="w-full bg-[rgba(17,17,27,0.25)] cursor-grab active:cursor-grabbing block"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchEnd}
+        className="w-full bg-[rgba(17,17,27,0.25)] cursor-grab active:cursor-grabbing block touch-none"
       />
     </div>
   );
