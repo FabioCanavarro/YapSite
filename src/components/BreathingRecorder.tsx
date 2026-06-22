@@ -20,9 +20,29 @@ interface BreathingRecorderProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  removeFillerWords: boolean;
+  enableSwearWords: boolean;
+  customPrompt: string;
+  language: string;
+  customMoods: { name: string; color: string }[];
+  categoriesConfig: { mode: "open" | "flexible" | "strict"; list: string[] };
+  tagsConfig: { mode: "open" | "flexible" | "strict"; list: string[] };
+  onRegisterTags: (category: string, tags: string[]) => void;
 }
 
-export default function BreathingRecorder({ isOpen, onClose, onSuccess }: BreathingRecorderProps) {
+export default function BreathingRecorder({ 
+  isOpen, 
+  onClose, 
+  onSuccess,
+  removeFillerWords,
+  enableSwearWords,
+  customPrompt,
+  language,
+  customMoods,
+  categoriesConfig,
+  tagsConfig,
+  onRegisterTags
+}: BreathingRecorderProps) {
   const [isRecording, setIsRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0);
@@ -235,29 +255,8 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
     const sizeTag = `_filesize:${size}`;
     const customTags = [sizeTag];
 
-    let removeFillerWords = true;
-    let enableSwearWords = false;
-    let customPrompt = "";
-    let language = "multidetect";
-    let customMoods = [];
-    let categories = { mode: "open", list: [] };
-    let tags = { mode: "open", list: [] };
-
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings_v2");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          removeFillerWords = parsed.removeFillerWords ?? true;
-          enableSwearWords = parsed.enableSwearWords ?? false;
-          customPrompt = parsed.customPrompt ?? "";
-          language = parsed.language ?? "multidetect";
-          customMoods = parsed.customMoods ?? [];
-          categories = parsed.categories ?? { mode: "open", list: [] };
-          tags = parsed.tags ?? { mode: "open", list: [] };
-        } catch (e) {}
-      }
-    }
+    const categories = categoriesConfig;
+    const tags = tagsConfig;
 
     const { data: dbData, error: dbError } = await supabase
       .from("journal_logs")
@@ -299,30 +298,10 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
           const processedLog = await res.json();
           
           // Auto register spouted category & tags
-          if (processedLog && typeof window !== "undefined") {
+          if (processedLog) {
             const categoryTag = processedLog.custom_tags?.find((t: string) => t.startsWith("_category:"));
             const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
-            
-            const savedSettings = localStorage.getItem("yapsite_settings_v2");
-            if (savedSettings) {
-              try {
-                const parsedSettings = JSON.parse(savedSettings);
-                let settingsChanged = false;
-                if (categoryName && !parsedSettings.categories?.list?.includes(categoryName)) {
-                  parsedSettings.categories.list.push(categoryName);
-                  settingsChanged = true;
-                }
-                processedLog.ai_tags?.forEach((t: string) => {
-                  if (t && !parsedSettings.tags?.list?.includes(t)) {
-                    parsedSettings.tags.list.push(t);
-                    settingsChanged = true;
-                  }
-                });
-                if (settingsChanged) {
-                  localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsedSettings));
-                }
-              } catch (e) {}
-            }
+            onRegisterTags(categoryName, processedLog.ai_tags || []);
 
             // Write run history log
             try {

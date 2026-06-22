@@ -7,8 +7,7 @@ import {
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
   Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
-  Plus, CheckSquare, Square, RefreshCw, BookOpen, GitFork, 
-  Play, StopCircle, HelpCircle, History
+  Plus, CheckSquare, Square, Play, History, Edit2
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -30,6 +29,12 @@ interface Log {
   reflections: string | null;
   processing_status: string;
   created_at: string;
+}
+
+interface Profile {
+  id: string;
+  name: string;
+  config: any;
 }
 
 const defaultSettings = {
@@ -62,7 +67,7 @@ Welcome to YapSite, your ultimate companion for voice journaling. Here is how yo
 
 ---
 
-## 📝 Markdown Styling
+## 📝 Markdown Styling & Obsidian Admonitions
 
 You can use standard Markdown syntax in your reflections or when shape-shifting thoughts. The AI will also format your journal entries with Markdown:
 - Use \`# Heading 1\`, \`## Heading 2\`, and \`### Heading 3\` to structure your notes.
@@ -70,15 +75,13 @@ You can use standard Markdown syntax in your reflections or when shape-shifting 
 - Use \`---\` to add a beautiful horizontal line separator.
 - Start a line with \`- \` or \`* \` to create list items.
 
----
-
-## 🗺️ Inline Obsidian Leaflet Maps
-
-You can insert interactive Leaflet Maps anywhere inside your journal thoughts or retroactive reflections using simple inline tokens.
-For example, type:
-\`[map: 38.7223, -9.1393, Lisbon, Portugal]\`
-
-This will render a full, interactive street-level map centered at the coordinates of Lisbon. Feel free to use it to record places you've visited, coffee shops you like, or memories in specific coordinates!
+### Obsidian Admonition Blocks
+Admonition callout boxes can be rendered natively in your Tidied Thoughts or Reflections. Write a block like this:
+\`\`\`ad-note
+title: Daily Realization
+Remember to take short breathing breaks every 45 minutes of coding.
+\`\`\`
+Supported types include: \`ad-note\` (blue), \`ad-warning\` (orange), \`ad-success\` (green), \`ad-danger\` (red), and \`ad-tip\` (mauve).
 
 ---
 
@@ -93,6 +96,15 @@ For both Categories and Tags, you can configure the AI classification behavior i
 1. **Strict Mode**: The AI is forced to classify entries strictly using your predefined list. No new tags/categories will be created.
 2. **Flexible Mode**: The AI will try to map the entry to your list, but is free to create a new category/tag if none of them fit the emotional or semantic tone.
 3. **Open Mode**: The AI classifies entries freely and automatically appends any new category or tag to your settings list.
+
+---
+
+## ⚙️ Synced Device Configuration Profiles
+
+Your settings are no longer tied to a single device's browser memory!
+- All settings are saved under named **Configuration Profiles** synced directly to the Supabase database.
+- You can create, rename, or delete multiple profiles (e.g. "Therapist Vault", "Brief Notes", "Deep Reflection") to instantly switch constraints.
+- When re-analyzing any journal entry, a popup will ask which profile settings to apply!
 
 ---
 
@@ -119,8 +131,13 @@ export default function Dashboard() {
   // Tab navigation state
   const [activeTab, setActiveTab] = useState<"dashboard" | "graph" | "batch" | "documentation">("dashboard");
 
-  // Settings states
+  // Settings Modal & Profiles state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [activeProfileName, setActiveProfileName] = useState("Default Profile");
+  const [isSyncingProfile, setIsSyncingProfile] = useState(false);
+
+  // Active configuration states (loaded from active profile)
   const [removeFillerWords, setRemoveFillerWords] = useState(true);
   const [enableSwearWords, setEnableSwearWords] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
@@ -138,6 +155,12 @@ export default function Dashboard() {
   const [tagsConfig, setTagsConfig] = useState<{ mode: "open" | "flexible" | "strict"; list: string[] }>({ mode: "open", list: [] });
   const [newTagName, setNewTagName] = useState("");
 
+  // Profiles popup state
+  const [showNewProfileInput, setShowNewProfileInput] = useState(false);
+  const [newProfileNameInput, setNewProfileNameInput] = useState("");
+  const [showRenameProfileInput, setShowRenameProfileInput] = useState(false);
+  const [renameProfileNameInput, setRenameProfileNameInput] = useState("");
+
   // Sorting and rearranging states
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc' | 'size-desc' | 'size-asc' | 'custom'>('date-desc');
   const [isRearranging, setIsRearranging] = useState(false);
@@ -150,6 +173,8 @@ export default function Dashboard() {
   const [batchTotalCount, setBatchTotalCount] = useState(0);
   const [batchCurrentTitle, setBatchCurrentTitle] = useState("");
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
+  const [isBatchReanalyzePopupOpen, setIsBatchReanalyzePopupOpen] = useState(false);
+  const [selectedBatchProfileName, setSelectedBatchProfileName] = useState("");
 
   // Initialize offline sync hook
   const { isOnline } = useOfflineSync(() => fetchLogs());
@@ -162,42 +187,66 @@ export default function Dashboard() {
       
       if (session?.user) {
         setUser(session.user);
+        await fetchProfiles(session.user.id);
       }
       setIsLoading(false);
     }
     checkAuth();
   }, []);
 
-  // Load settings states and history from localStorage on mount
+  const handleGitHubLogin = async () => {
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "github",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) throw error;
+    } catch (err: any) {
+      toast.error(`GitHub login failed: ${err.message || err}`);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) throw error;
+    } catch (err: any) {
+      toast.error(`Google login failed: ${err.message || err}`);
+    }
+  };
+
+  const handleLogout = async () => {
+    const supabase = createClient();
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setUser(null);
+      setLogs([]);
+      setProfiles([]);
+      toast.success("Signed out successfully.");
+    } catch (err: any) {
+      toast.error(`Sign out failed: ${err.message || err}`);
+    }
+  };
+
+  // Load custom order & history logs from localStorage
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings_v2");
-      let settings = defaultSettings;
-      if (saved) {
-        try {
-          settings = JSON.parse(saved);
-        } catch (e) {
-          console.error("Failed to parse settings_v2, using defaults", e);
-        }
-      } else {
-        localStorage.setItem("yapsite_settings_v2", JSON.stringify(defaultSettings));
-      }
-
-      setRemoveFillerWords(settings.removeFillerWords ?? true);
-      setEnableSwearWords(settings.enableSwearWords ?? false);
-      setCustomPrompt(settings.customPrompt ?? "");
-      setLanguage(settings.language ?? "multidetect");
-      setCustomMoods(settings.customMoods ?? defaultSettings.customMoods);
-      setCategoriesConfig(settings.categories ?? defaultSettings.categories);
-      setTagsConfig(settings.tags ?? defaultSettings.tags);
-
       const savedOrder = localStorage.getItem("yapsite_custom_order");
       if (savedOrder) {
         try {
           setCustomOrder(JSON.parse(savedOrder));
         } catch (e) {}
       }
-
       loadHistory();
     }
   }, []);
@@ -234,14 +283,85 @@ export default function Dashboard() {
     toast.success("Run history logs cleared.");
   };
 
-  // Unified settings save helper
-  const saveSettings = (updatedFields: any) => {
-    if (typeof window === "undefined") return;
-    const saved = localStorage.getItem("yapsite_settings_v2");
-    const current = saved ? JSON.parse(saved) : defaultSettings;
+  // Database settings profiles fetching
+  const fetchProfiles = async (userId: string) => {
+    const supabase = createClient();
+    try {
+      const { data, error } = await supabase
+        .from("journal_logs")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("processing_status", "settings_profile");
 
-    const merged = {
-      ...current,
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const loadedProfiles = data.map((row) => {
+          const config = JSON.parse(row.raw_transcript);
+          return {
+            id: row.id,
+            name: row.ai_title || "Unnamed Profile",
+            config,
+          };
+        });
+        setProfiles(loadedProfiles);
+        
+        // Restore active profile from LocalStorage or pick first one
+        const savedActiveName = localStorage.getItem("yapsite_active_profile_name");
+        const active = loadedProfiles.find(p => p.name === savedActiveName) || loadedProfiles[0];
+        setActiveProfileName(active.name);
+        setSelectedBatchProfileName(active.name);
+        applyProfileSettings(active.config);
+      } else {
+        // Create initial default profile
+        const initialConfig = defaultSettings;
+        const { data: newRow, error: insertError } = await supabase
+          .from("journal_logs")
+          .insert({
+            user_id: userId,
+            audio_url: "settings_profile",
+            ai_title: "Default Profile",
+            raw_transcript: JSON.stringify(initialConfig),
+            processing_status: "settings_profile",
+            created_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (insertError) throw insertError;
+
+        const newProfile = {
+          id: newRow.id,
+          name: "Default Profile",
+          config: initialConfig,
+        };
+        setProfiles([newProfile]);
+        setActiveProfileName("Default Profile");
+        applyProfileSettings(initialConfig);
+      }
+    } catch (err) {
+      console.error("Error loading profiles:", err);
+      toast.error("Failed to load settings profiles.");
+    }
+  };
+
+  const applyProfileSettings = (config: any) => {
+    setRemoveFillerWords(config.removeFillerWords ?? true);
+    setEnableSwearWords(config.enableSwearWords ?? false);
+    setCustomPrompt(config.customPrompt ?? "");
+    setLanguage(config.language ?? "multidetect");
+    setCustomMoods(config.customMoods ?? defaultSettings.customMoods);
+    setCategoriesConfig(config.categories ?? defaultSettings.categories);
+    setTagsConfig(config.tags ?? defaultSettings.tags);
+  };
+
+  // Unified settings save helper that syncs to DB profile
+  const saveSettings = async (updatedFields: any) => {
+    if (!user) return;
+    setIsSyncingProfile(true);
+
+    // Merge new config parameters
+    const mergedConfig = {
       removeFillerWords,
       enableSwearWords,
       customPrompt,
@@ -252,8 +372,7 @@ export default function Dashboard() {
       ...updatedFields
     };
 
-    localStorage.setItem("yapsite_settings_v2", JSON.stringify(merged));
-
+    // Update active state variables
     if (updatedFields.removeFillerWords !== undefined) setRemoveFillerWords(updatedFields.removeFillerWords);
     if (updatedFields.enableSwearWords !== undefined) setEnableSwearWords(updatedFields.enableSwearWords);
     if (updatedFields.customPrompt !== undefined) setCustomPrompt(updatedFields.customPrompt);
@@ -261,22 +380,178 @@ export default function Dashboard() {
     if (updatedFields.customMoods !== undefined) setCustomMoods(updatedFields.customMoods);
     if (updatedFields.categories !== undefined) setCategoriesConfig(updatedFields.categories);
     if (updatedFields.tags !== undefined) setTagsConfig(updatedFields.tags);
+
+    // Sync state locally
+    const updatedProfiles = profiles.map(p => 
+      p.name === activeProfileName ? { ...p, config: mergedConfig } : p
+    );
+    setProfiles(updatedProfiles);
+
+    // Fallback sync LocalStorage
+    localStorage.setItem("yapsite_settings_v2", JSON.stringify(mergedConfig));
+
+    // Supabase update
+    const activeProfile = profiles.find(p => p.name === activeProfileName);
+    if (activeProfile) {
+      const supabase = createClient();
+      try {
+        const { error } = await supabase
+          .from("journal_logs")
+          .update({
+            raw_transcript: JSON.stringify(mergedConfig),
+          })
+          .eq("id", activeProfile.id);
+
+        if (error) throw error;
+      } catch (e) {
+        console.error("Database settings sync failed:", e);
+      }
+    }
+    setIsSyncingProfile(false);
   };
 
-  // Fetch logs once user state is confirmed
-  useEffect(() => {
-    if (user) {
-      fetchLogs();
+  // Switch Profiles Handler
+  const handleProfileSwitch = (profileName: string) => {
+    const target = profiles.find(p => p.name === profileName);
+    if (target) {
+      setActiveProfileName(target.name);
+      setSelectedBatchProfileName(target.name);
+      localStorage.setItem("yapsite_active_profile_name", target.name);
+      applyProfileSettings(target.config);
+      toast.success(`Switched to settings profile: "${target.name}"`);
     }
-  }, [user]);
+  };
 
-  // Silent background processing of pending entries on load
-  useEffect(() => {
-    if (logs.length > 0 && !isProcessingPending && isOnline) {
-      processPendingLogs();
+  // Create Profile
+  const handleCreateProfile = async () => {
+    const name = newProfileNameInput.trim();
+    if (!name) return;
+    if (profiles.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+      toast.error("Profile name already exists");
+      return;
     }
-  }, [logs, isOnline]);
 
+    setIsSyncingProfile(true);
+    const activeConfig = {
+      removeFillerWords,
+      enableSwearWords,
+      customPrompt,
+      language,
+      customMoods,
+      categories: categoriesConfig,
+      tags: tagsConfig
+    };
+
+    const supabase = createClient();
+    try {
+      const { data: newRow, error } = await supabase
+        .from("journal_logs")
+        .insert({
+          user_id: user.id,
+          audio_url: "settings_profile",
+          ai_title: name,
+          raw_transcript: JSON.stringify(activeConfig),
+          processing_status: "settings_profile",
+          created_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const newProfile: Profile = {
+        id: newRow.id,
+        name: name,
+        config: activeConfig
+      };
+      setProfiles(prev => [...prev, newProfile]);
+      setActiveProfileName(name);
+      localStorage.setItem("yapsite_active_profile_name", name);
+      setShowNewProfileInput(false);
+      setNewProfileNameInput("");
+      toast.success(`Created settings profile: "${name}"`);
+    } catch (e) {
+      console.error("Create profile error:", e);
+      toast.error("Failed to create profile");
+    } finally {
+      setIsSyncingProfile(false);
+    }
+  };
+
+  // Rename Profile
+  const handleRenameProfile = async () => {
+    const name = renameProfileNameInput.trim();
+    if (!name) return;
+    if (profiles.some(p => p.name.toLowerCase() === name.toLowerCase())) {
+      toast.error("Profile name already exists");
+      return;
+    }
+
+    const activeProfile = profiles.find(p => p.name === activeProfileName);
+    if (!activeProfile) return;
+
+    setIsSyncingProfile(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from("journal_logs")
+        .update({ ai_title: name })
+        .eq("id", activeProfile.id);
+
+      if (error) throw error;
+
+      setProfiles(prev => prev.map(p => p.id === activeProfile.id ? { ...p, name } : p));
+      setActiveProfileName(name);
+      localStorage.setItem("yapsite_active_profile_name", name);
+      setShowRenameProfileInput(false);
+      setRenameProfileNameInput("");
+      toast.success(`Profile renamed to "${name}"`);
+    } catch (e) {
+      console.error("Rename profile error:", e);
+      toast.error("Failed to rename profile");
+    } finally {
+      setIsSyncingProfile(false);
+    }
+  };
+
+  // Delete Profile
+  const handleDeleteProfile = async () => {
+    if (profiles.length <= 1) {
+      toast.warning("Cannot delete the only remaining profile");
+      return;
+    }
+
+    const activeProfile = profiles.find(p => p.name === activeProfileName);
+    if (!activeProfile) return;
+
+    if (!confirm(`Are you sure you want to delete profile "${activeProfileName}"?`)) return;
+
+    setIsSyncingProfile(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from("journal_logs")
+        .delete()
+        .eq("id", activeProfile.id);
+
+      if (error) throw error;
+
+      const remaining = profiles.filter(p => p.id !== activeProfile.id);
+      setProfiles(remaining);
+      const nextActive = remaining[0];
+      setActiveProfileName(nextActive.name);
+      localStorage.setItem("yapsite_active_profile_name", nextActive.name);
+      applyProfileSettings(nextActive.config);
+      toast.success(`Deleted settings profile: "${activeProfileName}"`);
+    } catch (e) {
+      console.error("Delete profile error:", e);
+      toast.error("Failed to delete profile");
+    } finally {
+      setIsSyncingProfile(false);
+    }
+  };
+
+  // Fetch journal entries once user state is confirmed
   const fetchLogs = async () => {
     if (!user) return;
 
@@ -285,6 +560,7 @@ export default function Dashboard() {
       const { data, error } = await supabase
         .from("journal_logs")
         .select("*")
+        .neq("processing_status", "settings_profile") // Exclude settings logs
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -295,6 +571,7 @@ export default function Dashboard() {
     }
   };
 
+  // Silent background processing of pending entries on load
   const processPendingLogs = async () => {
     const pending = logs.filter((log) => log.processing_status === "pending");
     if (pending.length === 0) return;
@@ -349,7 +626,7 @@ export default function Dashboard() {
             action: "Background Processing",
             title: log.ai_title || "Pending Entry",
             status: "failed",
-            error: `Server responded with ${res.status}`,
+            error: `Server responded with status ${res.status}`,
           });
         }
       } catch (err: any) {
@@ -366,11 +643,10 @@ export default function Dashboard() {
   };
 
   const registerNewCategoryAndTags = (category: string, tags: string[]) => {
-    if (typeof window === "undefined") return;
-    const saved = localStorage.getItem("yapsite_settings_v2");
-    if (!saved) return;
+    const activeProfile = profiles.find(p => p.name === activeProfileName);
+    if (!activeProfile) return;
     try {
-      const parsed = JSON.parse(saved);
+      const parsed = activeProfile.config;
       let changed = false;
       if (category && !parsed.categories.list.includes(category)) {
         parsed.categories.list.push(category);
@@ -383,48 +659,12 @@ export default function Dashboard() {
         }
       });
       if (changed) {
-        localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsed));
-        setCategoriesConfig(parsed.categories);
-        setTagsConfig(parsed.tags);
+        saveSettings({
+          categories: parsed.categories,
+          tags: parsed.tags
+        });
       }
     } catch (e) {}
-  };
-
-  // Auth logins
-  const handleGitHubLogin = async () => {
-    const supabase = createClient();
-    try {
-      await supabase.auth.signInWithOAuth({
-        provider: "github",
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-    } catch (err) {
-      toast.error("OAuth registration failed.");
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    const supabase = createClient();
-    try {
-      await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-    } catch (err) {
-      toast.error("OAuth registration failed.");
-    }
-  };
-
-  const handleLogout = async () => {
-    const supabase = createClient();
-    await supabase.auth.signOut();
-    setUser(null);
-    setLogs([]);
-    router.push("/");
   };
 
   const deleteEntry = async (id: string, e: React.MouseEvent) => {
@@ -532,15 +772,28 @@ export default function Dashboard() {
     setSelectedLogs([]);
   };
 
-  const startBatchReanalysis = async () => {
+  const startBatchReanalysis = async (profileName: string) => {
     if (selectedLogs.length === 0) return;
+
+    // Load config from the chosen profile
+    const chosenProfile = profiles.find(p => p.name === profileName);
+    const config = chosenProfile ? chosenProfile.config : defaultSettings;
+
+    const bRemoveFillerWords = config.removeFillerWords ?? true;
+    const bEnableSwearWords = config.enableSwearWords ?? false;
+    const bCustomPrompt = config.customPrompt ?? "";
+    const bLanguage = config.language ?? "multidetect";
+    const bCustomMoods = config.customMoods ?? [];
+    const bCategories = config.categories ?? { mode: "open", list: [] };
+    const bTags = config.tags ?? { mode: "open", list: [] };
+
     setIsProcessingBatch(true);
     setBatchTotalCount(selectedLogs.length);
     setBatchCurrentIndex(0);
+    setIsBatchReanalyzePopupOpen(false);
 
-    toast.loading(`Processing batch re-analysis queue of ${selectedLogs.length} entries...`, { id: "batch-run" });
+    toast.loading(`Processing batch re-analysis queue of ${selectedLogs.length} entries with profile "${profileName}"...`, { id: "batch-run" });
 
-    // Cancel state reference
     const cancelRef = { cancelled: false };
     (window as any).cancelActiveBatch = () => {
       cancelRef.cancelled = true;
@@ -568,13 +821,13 @@ export default function Dashboard() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             logId,
-            removeFillerWords,
-            enableSwearWords,
-            customPrompt,
-            language,
-            customMoods,
-            categories: categoriesConfig,
-            tags: tagsConfig
+            removeFillerWords: bRemoveFillerWords,
+            enableSwearWords: bEnableSwearWords,
+            customPrompt: bCustomPrompt,
+            language: bLanguage,
+            customMoods: bCustomMoods,
+            categories: bCategories,
+            tags: bTags
           })
         });
 
@@ -633,7 +886,6 @@ export default function Dashboard() {
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-calm/10 blur-3xl" />
 
         <div className="w-full max-w-md text-center z-10">
-          {/* Logo Icon */}
           <motion.div
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
@@ -669,15 +921,25 @@ export default function Dashboard() {
           >
             <button
               onClick={handleGitHubLogin}
-              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm"
+              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 hover:text-hype text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm group"
             >
-              Sign In with GitHub
+              <svg className="w-5 h-5 text-text group-hover:text-hype transition-colors shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" />
+                <path d="M9 18c-4.51 2-5-2-7-2" />
+              </svg>
+              <span>Sign In with GitHub</span>
             </button>
             <button
               onClick={handleGoogleLogin}
-              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm"
+              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 hover:text-hype text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm group"
             >
-              Sign In with Google
+              <svg className="w-5 h-5 text-text group-hover:text-hype transition-colors shrink-0" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+              </svg>
+              <span>Sign In with Google</span>
             </button>
           </motion.div>
         </div>
@@ -705,6 +967,12 @@ export default function Dashboard() {
                 {isOnline ? "Online" : "Offline Mode"}
               </span>
             </div>
+            
+            {/* Active profile badge */}
+            <span className="text-[10px] bg-crust text-hype border border-hype/20 px-2.5 py-1 rounded-full font-bold">
+              {activeProfileName}
+            </span>
+
             {/* Settings Button */}
             <button
               onClick={() => setIsSettingsOpen(true)}
@@ -745,6 +1013,96 @@ export default function Dashboard() {
                 >
                   <X className="w-5 h-5" />
                 </button>
+              </div>
+
+              {/* Profiles Selector and Manager */}
+              <div className="flex flex-col gap-2.5 border border-hype/15 bg-crust/40 p-4 rounded-2xl text-left">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-bold text-text">Synced Config Profile</span>
+                  {isSyncingProfile && (
+                    <span className="text-[9px] text-hype font-mono animate-pulse">Syncing...</span>
+                  )}
+                </div>
+
+                {!showNewProfileInput && !showRenameProfileInput ? (
+                  <div className="flex gap-2 items-center flex-wrap">
+                    <select
+                      value={activeProfileName}
+                      onChange={(e) => handleProfileSwitch(e.target.value)}
+                      className="p-2 bg-crust border border-overlay/10 rounded-xl text-xs text-text focus:outline-none flex-1 cursor-pointer"
+                    >
+                      {profiles.map(p => (
+                        <option key={p.id} value={p.name}>{p.name}</option>
+                      ))}
+                    </select>
+
+                    <button
+                      onClick={() => setShowNewProfileInput(true)}
+                      className="p-2 border border-surface hover:text-hype text-text rounded-xl text-xs cursor-pointer font-medium"
+                    >
+                      New
+                    </button>
+                    <button
+                      onClick={() => {
+                        setRenameProfileNameInput(activeProfileName);
+                        setShowRenameProfileInput(true);
+                      }}
+                      className="p-2 border border-surface hover:text-hype text-text rounded-xl text-xs cursor-pointer font-medium"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      onClick={handleDeleteProfile}
+                      className="p-2 border border-surface hover:text-stressed text-text rounded-xl text-xs cursor-pointer font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ) : showNewProfileInput ? (
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      placeholder="New profile name..."
+                      value={newProfileNameInput}
+                      onChange={(e) => setNewProfileNameInput(e.target.value)}
+                      className="p-2 bg-crust border border-overlay/10 rounded-xl text-xs text-text focus:outline-none flex-1"
+                    />
+                    <button
+                      onClick={handleCreateProfile}
+                      className="px-3 py-2 bg-hype text-crust text-xs font-bold rounded-xl hover:bg-hype/90 cursor-pointer"
+                    >
+                      Create
+                    </button>
+                    <button
+                      onClick={() => setShowNewProfileInput(false)}
+                      className="px-3 py-2 border border-surface text-text text-xs font-bold rounded-xl cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      placeholder="Rename profile..."
+                      value={renameProfileNameInput}
+                      onChange={(e) => setRenameProfileNameInput(e.target.value)}
+                      className="p-2 bg-crust border border-overlay/10 rounded-xl text-xs text-text focus:outline-none flex-1"
+                    />
+                    <button
+                      onClick={handleRenameProfile}
+                      className="px-3 py-2 bg-hype text-crust text-xs font-bold rounded-xl hover:bg-hype/90 cursor-pointer"
+                    >
+                      Rename
+                    </button>
+                    <button
+                      onClick={() => setShowRenameProfileInput(false)}
+                      className="px-3 py-2 border border-surface text-text text-xs font-bold rounded-xl cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Toggles */}
@@ -1005,7 +1363,7 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* Main Content (Responsive Canvas) */}
+      {/* Main Content */}
       <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6">
         
         {/* Navigation Tabs */}
@@ -1397,7 +1755,7 @@ export default function Dashboard() {
 
               {/* Action trigger button */}
               <button
-                onClick={startBatchReanalysis}
+                onClick={() => setIsBatchReanalyzePopupOpen(true)}
                 disabled={selectedLogs.length === 0 || isProcessingBatch}
                 className="w-full py-3.5 bg-hype disabled:bg-surface disabled:text-overlay disabled:cursor-not-allowed text-crust font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 hover:bg-hype/90 transition-all cursor-pointer shadow-md"
               >
@@ -1495,11 +1853,78 @@ export default function Dashboard() {
         </motion.button>
       </div>
 
+      {/* Batch Re-analysis Profile Selector Modal */}
+      <AnimatePresence>
+        {isBatchReanalyzePopupOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/85 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel p-6 rounded-3xl border border-hype/20 flex flex-col gap-4 text-left shadow-xl"
+            >
+              <div className="flex justify-between items-center border-b border-surface pb-2">
+                <h3 className="text-sm font-bold text-text flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-hype" />
+                  <span>Choose Profile for Batch Re-analysis</span>
+                </h3>
+                <button
+                  onClick={() => setIsBatchReanalyzePopupOpen(false)}
+                  className="text-overlay hover:text-text cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-overlay uppercase">Profile Target</label>
+                <select
+                  value={selectedBatchProfileName}
+                  onChange={(e) => setSelectedBatchProfileName(e.target.value)}
+                  className="w-full p-2.5 bg-crust border border-overlay/10 text-xs text-text rounded-xl focus:outline-none cursor-pointer"
+                >
+                  {profiles.length > 0 ? (
+                    profiles.map(p => (
+                      <option key={p.id} value={p.name}>{p.name}</option>
+                    ))
+                  ) : (
+                    <option value="Default Profile">Default Profile</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setIsBatchReanalyzePopupOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-crust hover:bg-surface text-xs font-semibold text-overlay cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => startBatchReanalysis(selectedBatchProfileName || "Default Profile")}
+                  className="px-4 py-2 rounded-xl bg-hype text-crust text-xs font-bold hover:bg-hype/90 cursor-pointer shadow-md"
+                >
+                  Run Batch Re-analysis
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Breathing Recorder Overlay */}
       <BreathingRecorder
         isOpen={isRecorderOpen}
         onClose={() => setIsRecorderOpen(false)}
         onSuccess={() => fetchLogs()}
+        removeFillerWords={removeFillerWords}
+        enableSwearWords={enableSwearWords}
+        customPrompt={customPrompt}
+        language={language}
+        customMoods={customMoods}
+        categoriesConfig={categoriesConfig}
+        tagsConfig={tagsConfig}
+        onRegisterTags={registerNewCategoryAndTags}
       />
     </div>
   );

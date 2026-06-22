@@ -2,10 +2,10 @@
 
 import { use, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { 
   ArrowLeft, Volume2, VolumeX, FileText, Check, 
-  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3
+  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -25,6 +25,35 @@ interface Log {
   processing_status: string;
   created_at: string;
 }
+
+interface Profile {
+  id: string;
+  name: string;
+  config: any;
+}
+
+const defaultSettings = {
+  removeFillerWords: true,
+  enableSwearWords: false,
+  customPrompt: "",
+  language: "multidetect",
+  customMoods: [
+    { name: "Stressed", color: "#f38ba8" },
+    { name: "Calm", color: "#74c7ec" },
+    { name: "Focused", color: "#a6e3a1" },
+    { name: "Excited", color: "#cba6f7" },
+    { name: "Sad", color: "#89b4fa" },
+    { name: "Tired", color: "#fab387" }
+  ],
+  categories: {
+    mode: "open" as "open" | "flexible" | "strict",
+    list: ["School", "Work", "Personal", "Health", "Social"]
+  },
+  tags: {
+    mode: "open" as "open" | "flexible" | "strict",
+    list: ["memories", "coding", "troubles", "relationships", "ideas", "dreams"]
+  }
+};
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -64,22 +93,54 @@ export default function JournalDetail({ params }: PageProps) {
     { name: "Tired", color: "#fab387" }
   ]);
 
-  // Load categories and moods on mount
+  // Edit tidied thoughts state
+  const [isEditingTidied, setIsEditingTidied] = useState(false);
+  const [editedTidiedText, setEditedTidiedText] = useState("");
+  const [isSavingTidied, setIsSavingTidied] = useState(false);
+
+  // Sync Profiles re-analysis states
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [isReanalyzePopupOpen, setIsReanalyzePopupOpen] = useState(false);
+  const [selectedProfileName, setSelectedProfileName] = useState("");
+
+  // Load profiles, categories & moods from database
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings_v2");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (parsed.categories?.list) {
-            setCategoriesList(parsed.categories.list);
+    async function loadProfilesAndSettings() {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      try {
+        const { data, error } = await supabase
+          .from("journal_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("processing_status", "settings_profile");
+
+        if (!error && data && data.length > 0) {
+          const loadedProfiles = data.map((row) => ({
+            id: row.id,
+            name: row.ai_title || "Unnamed Profile",
+            config: JSON.parse(row.raw_transcript),
+          }));
+          setProfiles(loadedProfiles);
+          
+          // Preselect first profile
+          const savedActiveName = localStorage.getItem("yapsite_active_profile_name") || loadedProfiles[0].name;
+          const active = loadedProfiles.find(p => p.name === savedActiveName) || loadedProfiles[0];
+          setSelectedProfileName(active.name);
+
+          if (active.config.categories?.list) {
+            setCategoriesList(active.config.categories.list);
           }
-          if (parsed.customMoods) {
-            setMoodsList(parsed.customMoods);
+          if (active.config.customMoods) {
+            setMoodsList(active.config.customMoods);
           }
-        } catch (e) {}
-      }
+        }
+      } catch (e) {}
     }
+
+    loadProfilesAndSettings();
   }, []);
 
   useEffect(() => {
@@ -109,6 +170,7 @@ export default function JournalDetail({ params }: PageProps) {
 
         setLog(data);
         setReflections(data.reflections || "");
+        setEditedTidiedText(data.tidied_log || "");
         setEditedTitle(data.ai_title || "");
         setEditedTags(data.ai_tags?.join(", ") || "");
         setEditedMoodColor(data.ai_mood_color || "#74c7ec");
@@ -127,7 +189,7 @@ export default function JournalDetail({ params }: PageProps) {
         // Auto-enable reflections edit mode if empty
         setIsEditingReflections(!data.reflections);
 
-        // Generate a secure signed URL for private audio playbacks
+        // Generate playback audio URL
         if (data.audio_url) {
           try {
             const urlObj = new URL(data.audio_url);
@@ -137,7 +199,7 @@ export default function JournalDetail({ params }: PageProps) {
             if (storagePath) {
               const { data: signedData, error: signedError } = await supabase.storage
                 .from("audio_journals")
-                .createSignedUrl(storagePath, 3600); // 1 hour validation
+                .createSignedUrl(storagePath, 3600);
               
               if (!signedError && signedData) {
                 setAudioPlaybackUrl(signedData.signedUrl);
@@ -148,12 +210,10 @@ export default function JournalDetail({ params }: PageProps) {
               setAudioPlaybackUrl(data.audio_url);
             }
           } catch (urlErr) {
-            console.error("Failed to generate signed playback URL:", urlErr);
             setAudioPlaybackUrl(data.audio_url);
           }
         }
       } catch (err) {
-        console.error("Error fetching journal detail:", err);
         toast.error("Failed to load journal entry.");
         router.push("/");
       } finally {
@@ -187,13 +247,12 @@ export default function JournalDetail({ params }: PageProps) {
       
       setIsSpeaking(true);
       window.speechSynthesis.speak(utterance);
-      toast.success("Reading tidied journal aloud...");
+      toast.success("Reading tidied thoughts aloud...");
     }
   };
 
   const handleSaveReflections = async () => {
     if (!log) return;
-
     setIsSavingReflections(true);
 
     const supabase = createClient();
@@ -207,12 +266,34 @@ export default function JournalDetail({ params }: PageProps) {
 
       setLog({ ...log, reflections });
       setIsEditingReflections(false);
-      toast.success("Reflections vault updated!");
+      toast.success("Reflections updated successfully!");
     } catch (err) {
-      console.error("Error saving reflections:", err);
       toast.error("Failed to update reflections.");
     } finally {
       setIsSavingReflections(false);
+    }
+  };
+
+  const handleSaveTidied = async () => {
+    if (!log) return;
+    setIsSavingTidied(true);
+
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from("journal_logs")
+        .update({ tidied_log: editedTidiedText })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setLog({ ...log, tidied_log: editedTidiedText });
+      setIsEditingTidied(false);
+      toast.success("Tidied thoughts updated successfully!");
+    } catch (err) {
+      toast.error("Failed to save changes.");
+    } finally {
+      setIsSavingTidied(false);
     }
   };
 
@@ -227,18 +308,22 @@ export default function JournalDetail({ params }: PageProps) {
       return;
     }
 
-    // Auto add to categories list in settings if custom is created
+    // Auto add to categories list in active profile if custom is created
     if (showCustomCategoryInput && finalCategory && typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings_v2");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (!parsed.categories.list.includes(finalCategory)) {
-            parsed.categories.list.push(finalCategory);
-            localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsed));
+      const activeProfile = profiles.find(p => p.name === selectedProfileName);
+      if (activeProfile) {
+        const parsed = activeProfile.config;
+        if (!parsed.categories.list.includes(finalCategory)) {
+          parsed.categories.list.push(finalCategory);
+          const supabase = createClient();
+          try {
+            await supabase
+              .from("journal_logs")
+              .update({ raw_transcript: JSON.stringify(parsed) })
+              .eq("id", activeProfile.id);
             setCategoriesList(parsed.categories.list);
-          }
-        } catch (e) {}
+          } catch (e) {}
+        }
       }
     }
 
@@ -280,42 +365,29 @@ export default function JournalDetail({ params }: PageProps) {
       setEditedCategory(finalCategory || "General");
       toast.success("Journal details updated successfully!");
     } catch (err) {
-      console.error("Error saving details:", err);
       toast.error("Failed to update details.");
     } finally {
       setIsSavingDetails(false);
     }
   };
 
-  const handleReanalyze = async () => {
+  const handleReanalyze = async (profileName: string) => {
     if (!log) return;
+    setIsReanalyzePopupOpen(false);
     setIsReanalyzing(true);
-    toast.loading("Re-analyzing voice entry with settings...", { id: "reanalyzing" });
+    toast.loading(`Re-analyzing entry with profile "${profileName}"...`, { id: "reanalyzing" });
 
-    // Load settings from localStorage
-    let removeFillerWords = true;
-    let enableSwearWords = false;
-    let customPrompt = "";
-    let language = "multidetect";
-    let customMoods = [];
-    let categories = { mode: "open" as const, list: [] as string[] };
-    let tags = { mode: "open" as const, list: [] as string[] };
+    // Load configurations from the chosen profile
+    const chosenProfile = profiles.find(p => p.name === profileName);
+    const config = chosenProfile ? chosenProfile.config : defaultSettings;
 
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings_v2");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          removeFillerWords = parsed.removeFillerWords ?? true;
-          enableSwearWords = parsed.enableSwearWords ?? false;
-          customPrompt = parsed.customPrompt ?? "";
-          language = parsed.language ?? "multidetect";
-          customMoods = parsed.customMoods ?? [];
-          categories = parsed.categories ?? { mode: "open", list: [] };
-          tags = parsed.tags ?? { mode: "open", list: [] };
-        } catch (e) {}
-      }
-    }
+    const removeFillerWords = config.removeFillerWords ?? true;
+    const enableSwearWords = config.enableSwearWords ?? false;
+    const customPrompt = config.customPrompt ?? "";
+    const language = config.language ?? "multidetect";
+    const customMoods = config.customMoods ?? [];
+    const categories = config.categories ?? { mode: "open", list: [] };
+    const tags = config.tags ?? { mode: "open", list: [] };
 
     try {
       const processRes = await fetch("/api/process-audio", {
@@ -346,33 +418,33 @@ export default function JournalDetail({ params }: PageProps) {
       setEditedTitle(updatedLog.ai_title || "");
       setEditedTags(updatedLog.ai_tags?.join(", ") || "");
       setEditedMoodColor(updatedLog.ai_mood_color || "#74c7ec");
+      setEditedTidiedText(updatedLog.tidied_log || "");
       const d = new Date(updatedLog.created_at);
       const tzOffset = d.getTimezoneOffset() * 60000;
       const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0, 16);
       setEditedDateTime(localISOTime);
 
-      // Auto register spouted category & tags
-      if (typeof window !== "undefined") {
-        const savedSettings = localStorage.getItem("yapsite_settings_v2");
-        if (savedSettings) {
-          try {
-            const parsedSettings = JSON.parse(savedSettings);
-            let settingsChanged = false;
-            if (categoryName && !parsedSettings.categories?.list?.includes(categoryName)) {
-              parsedSettings.categories.list.push(categoryName);
-              settingsChanged = true;
-            }
-            updatedLog.ai_tags?.forEach((t: string) => {
-              if (t && !parsedSettings.tags?.list?.includes(t)) {
-                parsedSettings.tags.list.push(t);
-                settingsChanged = true;
-              }
-            });
-            if (settingsChanged) {
-              localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsedSettings));
-              setCategoriesList(parsedSettings.categories.list);
-            }
-          } catch (e) {}
+      // Auto register spouted category & tags back in database active profile
+      if (chosenProfile) {
+        const parsedSettings = chosenProfile.config;
+        let settingsChanged = false;
+        if (categoryName && !parsedSettings.categories?.list?.includes(categoryName)) {
+          parsedSettings.categories.list.push(categoryName);
+          settingsChanged = true;
+        }
+        updatedLog.ai_tags?.forEach((t: string) => {
+          if (t && !parsedSettings.tags?.list?.includes(t)) {
+            parsedSettings.tags.list.push(t);
+            settingsChanged = true;
+          }
+        });
+        if (settingsChanged) {
+          const supabase = createClient();
+          await supabase
+            .from("journal_logs")
+            .update({ raw_transcript: JSON.stringify(parsedSettings) })
+            .eq("id", chosenProfile.id);
+          setCategoriesList(parsedSettings.categories.list);
         }
       }
 
@@ -384,7 +456,7 @@ export default function JournalDetail({ params }: PageProps) {
           hist.unshift({
             id: Math.random().toString(36).substring(7),
             timestamp: new Date().toISOString(),
-            action: "Manual Re-analysis",
+            action: `Re-analysis (${profileName})`,
             title: updatedLog.ai_title || log.ai_title || "Untitled Entry",
             status: "success",
           });
@@ -403,7 +475,7 @@ export default function JournalDetail({ params }: PageProps) {
           hist.unshift({
             id: Math.random().toString(36).substring(7),
             timestamp: new Date().toISOString(),
-            action: "Manual Re-analysis",
+            action: `Re-analysis (${profileName})`,
             title: log.ai_title || "Untitled Entry",
             status: "failed",
             error: err.message || String(err),
@@ -479,7 +551,7 @@ ${reflections || "*No reflections added yet.*"}
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-base">
+      <div className="flex-1 flex items-center justify-center bg-base min-h-screen">
         <Loader2 className="w-8 h-8 text-hype animate-spin" />
       </div>
     );
@@ -511,7 +583,7 @@ ${reflections || "*No reflections added yet.*"}
           
           <div className="flex items-center gap-2">
             <button
-              onClick={handleReanalyze}
+              onClick={() => setIsReanalyzePopupOpen(true)}
               disabled={isReanalyzing}
               className="px-3.5 py-1.5 rounded-full bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-semibold text-text flex items-center gap-1.5 transition-transform duration-200 active:scale-95 shadow-md cursor-pointer"
             >
@@ -533,6 +605,65 @@ ${reflections || "*No reflections added yet.*"}
           </div>
         </div>
       </header>
+
+      {/* Re-analyze Profile Selector Dialog */}
+      <AnimatePresence>
+        {isReanalyzePopupOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm glass-panel p-6 rounded-3xl border border-hype/20 flex flex-col gap-4 text-left shadow-xl"
+            >
+              <div className="flex justify-between items-center border-b border-surface pb-2">
+                <h3 className="text-sm font-bold text-text flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-hype" />
+                  <span>Choose Profile for Re-analysis</span>
+                </h3>
+                <button
+                  onClick={() => setIsReanalyzePopupOpen(false)}
+                  className="text-overlay hover:text-text cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-overlay uppercase">Profile Target</label>
+                <select
+                  value={selectedProfileName}
+                  onChange={(e) => setSelectedProfileName(e.target.value)}
+                  className="w-full p-2.5 bg-crust border border-overlay/10 text-xs text-text rounded-xl focus:outline-none cursor-pointer"
+                >
+                  {profiles.length > 0 ? (
+                    profiles.map(p => (
+                      <option key={p.id} value={p.name}>{p.name}</option>
+                    ))
+                  ) : (
+                    <option value="Default Profile">Default Profile</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setIsReanalyzePopupOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-crust hover:bg-surface text-xs font-semibold text-overlay cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleReanalyze(selectedProfileName || "Default Profile")}
+                  className="px-4 py-2 rounded-xl bg-hype text-crust text-xs font-bold hover:bg-hype/90 cursor-pointer shadow-md"
+                >
+                  Run Re-analysis
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Main Panel Content */}
       <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6">
@@ -684,7 +815,7 @@ ${reflections || "*No reflections added yet.*"}
                 </button>
               </div>
 
-              <h2 className="text-2xl font-extrabold tracking-tight text-text leading-snug mb-3 pr-8">
+              <h2 className="text-2xl font-extrabold tracking-tight text-text leading-snug mb-3 pr-8 text-left">
                 {log.ai_title || "Untitled Entry"}
               </h2>
 
@@ -710,7 +841,7 @@ ${reflections || "*No reflections added yet.*"}
                 ))}
               </div>
 
-              {/* Audio Player if URL available */}
+              {/* Audio Player */}
               {audioPlaybackUrl && (
                 <div className="w-full mt-4 p-2 rounded-2xl bg-crust border border-surface/50">
                   <audio src={audioPlaybackUrl} controls className="w-full h-10 accent-hype opacity-90" />
@@ -725,7 +856,7 @@ ${reflections || "*No reflections added yet.*"}
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.1 }}
-          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4"
+          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4 text-left"
         >
           <div className="flex justify-between items-center">
             <h3 className="text-xs font-semibold tracking-wider text-overlay uppercase flex items-center gap-1.5">
@@ -737,7 +868,7 @@ ${reflections || "*No reflections added yet.*"}
               <button
                 onClick={() => handleCopyText(log.tidied_log, "Tidied")}
                 className="p-2 rounded-full border bg-surface border-overlay/10 text-text hover:text-hype hover:border-hype/20 transition-all cursor-pointer"
-                title="Copy to Clipboard (with Metadata)"
+                title="Copy to Clipboard"
               >
                 <Copy className="w-4 h-4" />
               </button>
@@ -755,17 +886,78 @@ ${reflections || "*No reflections added yet.*"}
             </div>
           </div>
 
-          <div className="text-md text-text/90 leading-relaxed font-sans tracking-wide">
-            <MarkdownRenderer content={log.tidied_log || "No transcription content available."} />
-          </div>
+          {isEditingTidied ? (
+            <>
+              <textarea
+                placeholder="Edit tidied thoughts here..."
+                value={editedTidiedText}
+                onChange={(e) => {
+                  setEditedTidiedText(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = e.target.scrollHeight + 'px';
+                }}
+                ref={(el) => {
+                  if (el) {
+                    el.style.height = 'auto';
+                    el.style.height = el.scrollHeight + 'px';
+                  }
+                }}
+                className="w-full p-4 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm leading-relaxed resize-none overflow-hidden font-sans"
+              />
+
+              <div className="flex gap-2.5">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleSaveTidied}
+                  disabled={isSavingTidied}
+                  className="flex-1 py-3.5 px-6 rounded-2xl bg-hype text-crust font-bold flex items-center justify-center gap-2 transition-all duration-200 shadow-md cursor-pointer text-xs"
+                >
+                  {isSavingTidied ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-crust" />
+                  ) : (
+                    <Save className="w-4 h-4 fill-crust" />
+                  )}
+                  <span>Save Thoughts</span>
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    setEditedTidiedText(log.tidied_log || "");
+                    setIsEditingTidied(false);
+                  }}
+                  disabled={isSavingTidied}
+                  className="py-3.5 px-6 rounded-2xl bg-crust border border-surface hover:text-stressed text-overlay font-bold flex items-center justify-center transition-all duration-200 cursor-pointer text-xs"
+                >
+                  <span>Cancel</span>
+                </motion.button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-md text-text/90 leading-relaxed font-sans tracking-wide">
+                <MarkdownRenderer content={log.tidied_log || "No transcription content available."} />
+              </div>
+              <div className="flex justify-end mt-2">
+                <button
+                  onClick={() => setIsEditingTidied(true)}
+                  className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-semibold text-text flex items-center gap-1.5 transition-transform active:scale-95 shadow-sm cursor-pointer"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>Edit Thoughts</span>
+                </button>
+              </div>
+            </>
+          )}
         </motion.div>
 
-        {/* Raw Voice Transcript (Expandable) */}
+        {/* Raw Voice Transcript */}
         <motion.div
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-3"
+          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-3 text-left"
         >
           <div className="flex justify-between items-center">
             <h3 className="text-xs font-semibold tracking-wider text-overlay uppercase">
@@ -774,7 +966,7 @@ ${reflections || "*No reflections added yet.*"}
             <button
               onClick={() => handleCopyText(log.raw_transcript, "Raw")}
               className="p-1.5 rounded-lg border bg-surface border-overlay/10 text-overlay hover:text-text hover:border-overlay/20 transition-all cursor-pointer"
-              title="Copy to Clipboard (with Metadata)"
+              title="Copy to Clipboard"
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
@@ -789,7 +981,7 @@ ${reflections || "*No reflections added yet.*"}
           initial={{ opacity: 0, y: 15 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
-          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4 border border-hype/15"
+          className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4 border border-hype/15 text-left"
         >
           <div className="flex items-center gap-2">
             <Heart className="w-4 h-4 text-hype fill-hype" />
@@ -817,20 +1009,34 @@ ${reflections || "*No reflections added yet.*"}
                 className="w-full p-4 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm leading-relaxed resize-none overflow-hidden"
               />
 
-              <motion.button
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={handleSaveReflections}
-                disabled={isSavingReflections}
-                className="w-full py-3.5 px-6 rounded-2xl bg-hype text-crust font-bold flex items-center justify-center gap-2 transition-all duration-200 shadow-md cursor-pointer text-xs"
-              >
-                {isSavingReflections ? (
-                  <Loader2 className="w-4 h-4 animate-spin text-crust" />
-                ) : (
-                  <Save className="w-4 h-4 fill-crust" />
-                )}
-                <span>Save Reflection</span>
-              </motion.button>
+              <div className="flex gap-2.5">
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={handleSaveReflections}
+                  disabled={isSavingReflections}
+                  className="flex-1 py-3.5 px-6 rounded-2xl bg-hype text-crust font-bold flex items-center justify-center gap-2 transition-all duration-200 shadow-md cursor-pointer text-xs"
+                >
+                  {isSavingReflections ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-crust" />
+                  ) : (
+                    <Save className="w-4 h-4 fill-crust" />
+                  )}
+                  <span>Save Reflection</span>
+                </motion.button>
+                <motion.button
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => {
+                    setReflections(log.reflections || "");
+                    setIsEditingReflections(false);
+                  }}
+                  disabled={isSavingReflections}
+                  className="py-3.5 px-6 rounded-2xl bg-crust border border-surface hover:text-stressed text-overlay font-bold flex items-center justify-center transition-all duration-200 cursor-pointer text-xs"
+                >
+                  <span>Cancel</span>
+                </motion.button>
+              </div>
             </>
           ) : (
             <>

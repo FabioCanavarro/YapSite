@@ -1,132 +1,56 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Info, AlertTriangle, AlertCircle, CheckCircle2, Sparkles } from "lucide-react";
 
-interface LeafletMapProps {
-  lat: number;
-  lng: number;
-  label: string;
+interface AdmonitionProps {
+  type: string;
+  title?: string;
+  content: string;
 }
 
-function LeafletMap({ lat, lng, label }: LeafletMapProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<any>(null);
-  const [isLoaded, setIsLoaded] = useState(false);
+function Admonition({ type, title, content }: AdmonitionProps) {
+  const t = type.toLowerCase().trim();
+  
+  let color = "#74c7ec"; // default calm blue
+  let Icon = Info;
+  let label = "Note";
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  if (t === "warning" || t === "caution" || t === "attention") {
+    color = "#fab387"; // Tired orange
+    Icon = AlertTriangle;
+    label = "Warning";
+  } else if (t === "danger" || t === "error" || t === "failure" || t === "bug") {
+    color = "#f38ba8"; // Stressed red
+    Icon = AlertCircle;
+    label = "Danger";
+  } else if (t === "success" || t === "done" || t === "check") {
+    color = "#a6e3a1"; // Focused green
+    Icon = CheckCircle2;
+    label = "Success";
+  } else if (t === "tip" || t === "hint" || t === "important" || t === "idea") {
+    color = "#cba6f7"; // Excited mauve
+    Icon = Sparkles;
+    label = "Tip";
+  }
 
-    // Check if assets are already loading or loaded
-    let cssLink = document.getElementById("leaflet-cdn-css") as HTMLLinkElement;
-    if (!cssLink) {
-      cssLink = document.createElement("link");
-      cssLink.id = "leaflet-cdn-css";
-      cssLink.rel = "stylesheet";
-      cssLink.href = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css";
-      document.head.appendChild(cssLink);
-    }
-
-    let jsScript = document.getElementById("leaflet-cdn-js") as HTMLScriptElement;
-    if (!jsScript) {
-      jsScript = document.createElement("script");
-      jsScript.id = "leaflet-cdn-js";
-      jsScript.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
-      document.head.appendChild(jsScript);
-    }
-
-    const checkLeaflet = () => {
-      if ((window as any).L) {
-        setIsLoaded(true);
-      } else {
-        setTimeout(checkLeaflet, 100);
-      }
-    };
-
-    if (jsScript.onload) {
-      checkLeaflet();
-    } else {
-      jsScript.addEventListener("load", () => {
-        setIsLoaded(true);
-      });
-      checkLeaflet();
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isLoaded || !containerRef.current) return;
-
-    const L = (window as any).L;
-    if (!L) return;
-
-    // Destroy existing map instance if it exists
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
-
-    try {
-      const map = L.map(containerRef.current, {
-        center: [lat, lng],
-        zoom: 13,
-        zoomControl: true,
-        scrollWheelZoom: false,
-      });
-
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-        subdomains: "abcd",
-        maxZoom: 20
-      }).addTo(map);
-
-      // Modern pulsing marker
-      const customIcon = L.divIcon({
-        className: "custom-map-marker",
-        html: `
-          <div class="relative flex items-center justify-center">
-            <span class="animate-ping absolute inline-flex h-6 w-6 rounded-full bg-pink-500 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-pink-600 border border-white"></span>
-          </div>
-        `,
-        iconSize: [24, 24],
-        iconAnchor: [12, 12]
-      });
-
-      const marker = L.marker([lat, lng], { icon: customIcon }).addTo(map);
-      marker.bindPopup(`<strong class="text-crust">${label}</strong>`).openPopup();
-
-      mapInstanceRef.current = map;
-
-      // Leaflet viewport adjustment
-      setTimeout(() => {
-        map.invalidateSize();
-      }, 250);
-
-    } catch (e) {
-      console.error("Leaflet map initialization failed:", e);
-    }
-
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
-      }
-    };
-  }, [isLoaded, lat, lng, label]);
+  const finalTitle = title || label;
 
   return (
-    <div className="w-full my-4 relative">
-      <div 
-        ref={containerRef} 
-        className="w-full h-64 rounded-3xl overflow-hidden border border-surface/50 shadow-md bg-crust/50 z-10" 
-      />
-      {!isLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-crust/80 rounded-3xl border border-surface/50">
-          <div className="flex flex-col items-center gap-2">
-            <span className="animate-spin rounded-full h-6 w-6 border-b-2 border-hype"></span>
-            <span className="text-[10px] text-overlay">Loading Leaflet Map...</span>
-          </div>
-        </div>
-      )}
+    <div 
+      className="w-full my-4 rounded-2xl p-4 border-l-4 text-left flex flex-col gap-2 relative z-10"
+      style={{ 
+        borderColor: color, 
+        backgroundColor: `${color}0b` // 4% opacity tint
+      }}
+    >
+      <div className="flex items-center gap-2 font-bold text-sm" style={{ color }}>
+        <Icon className="w-4.5 h-4.5 shrink-0" />
+        <span>{finalTitle}</span>
+      </div>
+      <div className="text-xs text-text/90 leading-relaxed font-sans whitespace-pre-wrap pl-1">
+        {content}
+      </div>
     </div>
   );
 }
@@ -264,33 +188,89 @@ interface MarkdownRendererProps {
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
   if (!content) return null;
 
-  // Split by map token [map: lat, lng, label]
-  const parts = content.split(/(\[map:\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?(?:.*?\]))/gi);
+  // Custom Obsidian Admonitions blocks (```ad-note ... ```) and code blocks parsing
+  const lines = content.split("\n");
+  const renderedElements: React.ReactNode[] = [];
+  let i = 0;
+  let markdownAccumulator: string[] = [];
 
-  return (
-    <div className="markdown-content">
-      {parts.map((part, index) => {
-        if (part.startsWith("[map:") && part.endsWith("]")) {
-          const cleanToken = part.slice(5, -1);
-          const subparts = cleanToken.split(",");
-          const lat = parseFloat(subparts[0]?.trim() || "");
-          const lng = parseFloat(subparts[1]?.trim() || "");
-          const label = subparts.slice(2).join(",").trim() || "Location";
+  const flushMarkdownAccumulator = () => {
+    if (markdownAccumulator.length > 0) {
+      renderedElements.push(
+        <div key={`md-block-${renderedElements.length}`}>
+          {renderMarkdownBlocks(markdownAccumulator.join("\n"))}
+        </div>
+      );
+      markdownAccumulator = [];
+    }
+  };
 
-          if (!isNaN(lat) && !isNaN(lng)) {
-            return (
-              <LeafletMap key={index} lat={lat} lng={lng} label={label} />
-            );
-          }
-          return (
-            <div key={index} className="text-xs text-stressed italic my-2">
-              Invalid map coordinates: {part}
-            </div>
-          );
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    const admMatch = trimmedLine.match(/^(`{3,4})ad-([a-zA-Z0-9-]+)/);
+
+    // Detect admonition start (3 or 4 backticks)
+    if (admMatch) {
+      flushMarkdownAccumulator();
+      const backticks = admMatch[1];
+      const type = admMatch[2];
+      const bodyLines: string[] = [];
+      let customTitle = "";
+      i++;
+
+      while (i < lines.length && !lines[i].trim().startsWith(backticks)) {
+        const bodyLine = lines[i];
+        if (bodyLine.trim().startsWith("title:")) {
+          customTitle = bodyLine.trim().slice(6).trim();
+        } else {
+          bodyLines.push(bodyLine);
         }
+        i++;
+      }
+      i++; // skip closing backticks
 
-        return <div key={index}>{renderMarkdownBlocks(part)}</div>;
-      })}
-    </div>
-  );
+      renderedElements.push(
+        <Admonition 
+          key={`admonition-${renderedElements.length}`} 
+          type={type} 
+          title={customTitle} 
+          content={bodyLines.join("\n")} 
+        />
+      );
+      continue;
+    }
+
+    // Detect normal code block start (3 or 4 backticks)
+    const codeMatch = trimmedLine.match(/^(`{3,4})/);
+    if (codeMatch) {
+      flushMarkdownAccumulator();
+      const backticks = codeMatch[1];
+      const bodyLines: string[] = [];
+      i++;
+
+      while (i < lines.length && !lines[i].trim().startsWith(backticks)) {
+        bodyLines.push(lines[i]);
+        i++;
+      }
+      i++; // skip closing backticks
+
+      renderedElements.push(
+        <pre 
+          key={`code-block-${renderedElements.length}`} 
+          className="p-4 bg-crust rounded-2xl border border-surface text-xs font-mono text-text/90 my-3 overflow-x-auto select-text"
+        >
+          <code>{bodyLines.join("\n")}</code>
+        </pre>
+      );
+      continue;
+    }
+
+    markdownAccumulator.push(line);
+    i++;
+  }
+
+  flushMarkdownAccumulator();
+
+  return <div className="markdown-content">{renderedElements}</div>;
 }

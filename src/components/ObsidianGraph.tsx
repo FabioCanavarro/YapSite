@@ -46,12 +46,12 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
   const [scale, setScale] = useState(1);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [dimensions, setDimensions] = useState({ width: 800, height: 550 });
 
-  // Physics params
-  const charge = -120; // Repulsion strength
-  const gravity = 0.05; // Pull to center
-  const linkStrength = 0.03; // Pull of links
+  // Stable physics params
+  const charge = -150; // Repulsion force charge coefficient
+  const gravity = 0.04; // Gravity pulling nodes to (0,0)
+  const linkStrength = 0.04; // Attraction of links
   const friction = 0.85;
 
   // Interactivity states
@@ -64,8 +64,17 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
   const { nodes, links } = useMemo(() => {
     const nodeMap = new Map<string, Node>();
     const linkList: Link[] = [];
+    const linkSet = new Set<string>();
 
-    // Extract broad categories and specific tags
+    const addLink = (source: string, target: string) => {
+      const key = `${source}->${target}`;
+      const reverseKey = `${target}->${source}`;
+      if (!linkSet.has(key) && !linkSet.has(reverseKey)) {
+        linkSet.add(key);
+        linkList.push({ source, target });
+      }
+    };
+
     logs.forEach((log) => {
       // Find category tag in custom_tags
       const categoryTag = log.custom_tags?.find((t) => t.startsWith("_category:"));
@@ -78,10 +87,10 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           id: categoryId,
           label: categoryName,
           type: "category",
-          color: "#cba6f7", // Catppuccin Mauve
-          radius: 13,
-          x: Math.random() * 400 + 200,
-          y: Math.random() * 300 + 150,
+          color: "#cba6f7", // mauve
+          radius: 12,
+          x: (Math.random() - 0.5) * 60,
+          y: (Math.random() - 0.5) * 60,
           vx: 0,
           vy: 0,
         });
@@ -94,16 +103,16 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         label: log.ai_title || "Untitled Entry",
         type: "journal",
         color: log.ai_mood_color || "#74c7ec",
-        radius: 8,
-        x: Math.random() * 400 + 200,
-        y: Math.random() * 300 + 150,
+        radius: 7,
+        x: (Math.random() - 0.5) * 60,
+        y: (Math.random() - 0.5) * 60,
         vx: 0,
         vy: 0,
         journalId: log.id,
       });
 
       // Link Journal to Category
-      linkList.push({ source: journalId, target: categoryId });
+      addLink(journalId, categoryId);
 
       // Create Tag nodes and link them
       if (log.ai_tags && Array.isArray(log.ai_tags)) {
@@ -114,20 +123,20 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
               id: tagId,
               label: `#${tag}`,
               type: "tag",
-              color: "#a6e3a1", // Catppuccin Green
-              radius: 9,
-              x: Math.random() * 400 + 200,
-              y: Math.random() * 300 + 150,
+              color: "#a6e3a1", // green
+              radius: 8,
+              x: (Math.random() - 0.5) * 60,
+              y: (Math.random() - 0.5) * 60,
               vx: 0,
               vy: 0,
             });
           }
 
           // Link Journal to Tag
-          linkList.push({ source: journalId, target: tagId });
+          addLink(journalId, tagId);
 
           // Link Tag to Category to show broad hierarchy
-          linkList.push({ source: tagId, target: categoryId });
+          addLink(tagId, categoryId);
         });
       }
     });
@@ -168,7 +177,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
       const height = 550;
       setDimensions({ width, height });
       
-      // Center the graph initial pan
+      // Center the graph viewport initially
       setPanX(width / 2);
       setPanY(height / 2);
     };
@@ -194,18 +203,19 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
       const fx = new Array(currentNodes.length).fill(0);
       const fy = new Array(currentNodes.length).fill(0);
 
-      // 2. Repulsion force between all nodes (Coulomb-like repulsion)
+      // 2. Repulsion force between all nodes (Coulomb-like repulsion, bounded to prevent explosions)
       for (let i = 0; i < currentNodes.length; i++) {
         const nodeA = currentNodes[i];
         for (let j = i + 1; j < currentNodes.length; j++) {
           const nodeB = currentNodes[j];
           const dx = nodeB.x - nodeA.x;
           const dy = nodeB.y - nodeA.y;
-          const distSq = dx * dx + dy * dy + 0.1;
+          const distSq = dx * dx + dy * dy + 1.0; // minimum offset
           const dist = Math.sqrt(distSq);
 
-          if (dist < 320) {
-            const force = (charge * nodeA.radius * nodeB.radius) / distSq;
+          if (dist < 280) {
+            // Adding 15.0 to denominator bounds the force so it doesn't approach infinity at distance -> 0
+            const force = (charge * nodeA.radius * nodeB.radius) / (distSq + 15.0);
             const fX = (dx / dist) * force;
             const fY = (dy / dist) * force;
 
@@ -230,18 +240,21 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           const dy = tNode.y - sNode.y;
           const dist = Math.sqrt(dx * dx + dy * dy) || 0.1;
 
-          // Pull together
-          const targetDist = 70;
+          const targetDist = 65;
           const force = (dist - targetDist) * linkStrength;
           const fX = (dx / dist) * force;
           const fY = (dy / dist) * force;
 
           fx[sourceNodeIdx] += fX;
           fy[sourceNodeIdx] += fY;
-          fx[targetNodeIdx] -= fX;
-          fy[targetNodeIdx] -= fY;
+          fnTarget(targetNodeIdx, fX, fY);
         }
       });
+
+      function fnTarget(targetIdx: number, fX: number, fY: number) {
+        fx[targetIdx] -= fX;
+        fy[targetIdx] -= fY;
+      }
 
       // 4. Gravity towards the origin (0, 0)
       for (let i = 0; i < currentNodes.length; i++) {
@@ -250,7 +263,9 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         fy[i] -= node.y * gravity;
       }
 
-      // 5. Update velocities and positions
+      // 5. Update velocities and positions with strict velocity clamping and center bounding constraint
+      const maxVelocity = 4.5;
+      const maxRadius = 350; // Keep nodes within a 350px radius from the center (0, 0)
       for (let i = 0; i < currentNodes.length; i++) {
         const node = currentNodes[i];
 
@@ -259,6 +274,8 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           node.vx = 0;
         } else {
           node.vx = (node.vx + fx[i]) * friction;
+          // Clamp velocity
+          node.vx = Math.max(-maxVelocity, Math.min(node.vx, maxVelocity));
           node.x += node.vx;
         }
 
@@ -267,7 +284,18 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           node.vy = 0;
         } else {
           node.vy = (node.vy + fy[i]) * friction;
+          // Clamp velocity
+          node.vy = Math.max(-maxVelocity, Math.min(node.vy, maxVelocity));
           node.y += node.vy;
+        }
+
+        // Apply bounding circle constraint
+        const distFromCenter = Math.sqrt(node.x * node.x + node.y * node.y);
+        if (distFromCenter > maxRadius) {
+          node.x = (node.x / distFromCenter) * maxRadius;
+          node.y = (node.y / distFromCenter) * maxRadius;
+          node.vx *= -0.2; // slight bounce factor back to center
+          node.vy *= -0.2;
         }
       }
 
@@ -275,14 +303,13 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
       ctx.clearRect(0, 0, dimensions.width, dimensions.height);
 
       ctx.save();
-      // Apply pan & zoom
       ctx.translate(panX, panY);
       ctx.scale(scale, scale);
 
-      // Draw Grid lines behind graph
-      ctx.strokeStyle = "rgba(49, 50, 68, 0.2)"; // surface color
+      // Grid lines
+      ctx.strokeStyle = "rgba(49, 50, 68, 0.15)";
       ctx.lineWidth = 1;
-      const gridSize = 80;
+      const gridSize = 70;
       const startX = Math.floor((-panX / scale) / gridSize) * gridSize;
       const endX = startX + (dimensions.width / scale) + gridSize * 2;
       const startY = Math.floor((-panY / scale) / gridSize) * gridSize;
@@ -301,7 +328,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         ctx.stroke();
       }
 
-      // Identify connected nodes to highlighted/hovered node
+      // Hover highlight states
       const activeNode = hoverNodeRef.current;
       const connectedNodeIds = new Set<string>();
       if (activeNode) {
@@ -325,11 +352,11 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           ctx.lineTo(targetNode.x, targetNode.y);
           
           if (activeNode) {
-            ctx.strokeStyle = isHighlighted ? "rgba(116, 199, 236, 0.45)" : "rgba(49, 50, 68, 0.08)";
-            ctx.lineWidth = isHighlighted ? 1.5 : 0.5;
+            ctx.strokeStyle = isHighlighted ? "rgba(116, 199, 236, 0.5)" : "rgba(49, 50, 68, 0.05)";
+            ctx.lineWidth = isHighlighted ? 1.5 : 0.4;
           } else {
-            ctx.strokeStyle = "rgba(76, 79, 105, 0.25)";
-            ctx.lineWidth = 0.75;
+            ctx.strokeStyle = "rgba(76, 79, 105, 0.2)";
+            ctx.lineWidth = 0.6;
           }
           ctx.stroke();
         }
@@ -345,25 +372,23 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         ctx.arc(node.x, node.y, node.radius, 0, 2 * Math.PI);
         
         ctx.fillStyle = node.color;
-        ctx.globalAlpha = isDimmed ? 0.2 : 1.0;
+        ctx.globalAlpha = isDimmed ? 0.15 : 1.0;
         ctx.fill();
 
-        // Node outline/glowing border
-        ctx.strokeStyle = isSelf ? "#ffffff" : "rgba(17, 17, 27, 0.8)";
-        ctx.lineWidth = isSelf ? 2 : 1;
+        ctx.strokeStyle = isSelf ? "#ffffff" : "rgba(17, 17, 27, 0.7)";
+        ctx.lineWidth = isSelf ? 1.75 : 0.75;
         ctx.stroke();
 
-        // Draw node labels
         const showLabel = !isDimmed || isSelf || isNeighbor;
         if (showLabel) {
-          ctx.fillStyle = isSelf ? "#f5c2e7" : "#cdd6f4"; // Catppuccin Text/Pink
-          ctx.font = isSelf ? "bold 11px Inter, sans-serif" : "9px Inter, sans-serif";
+          ctx.fillStyle = isSelf ? "#f5c2e7" : "#cdd6f4";
+          ctx.font = isSelf ? "bold 10px Inter, sans-serif" : "9px Inter, sans-serif";
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillText(node.label, node.x, node.y + node.radius + 4);
+          ctx.fillText(node.label, node.x, node.y + node.radius + 3);
         }
 
-        ctx.globalAlpha = 1.0; // reset
+        ctx.globalAlpha = 1.0;
       });
 
       ctx.restore();
@@ -378,7 +403,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     };
   }, [links, panX, panY, scale, dimensions, charge, gravity, linkStrength]);
 
-  // Screen to World coords
+  // Coordinates transforms
   const screenToWorld = (sx: number, sy: number) => {
     return {
       x: (sx - panX) / scale,
@@ -396,7 +421,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     };
   };
 
-  // Mouse Move: Hovering & Dragging
+  // Mouse Handlers
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const screenCoords = getEventCoordinates(e);
     const worldCoords = screenToWorld(screenCoords.x, screenCoords.y);
@@ -416,26 +441,23 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
       return;
     }
 
-    // Find node under hover
     const hitNode = nodesRef.current.find((node) => {
       const dx = node.x - worldCoords.x;
       const dy = node.y - worldCoords.y;
-      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 5; // tolerance
+      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 6;
     });
 
     hoverNodeRef.current = hitNode || null;
   };
 
-  // Mouse Down: Start drag or pan
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const screenCoords = getEventCoordinates(e);
     const worldCoords = screenToWorld(screenCoords.x, screenCoords.y);
 
-    // Check hit node
     const hitNode = nodesRef.current.find((node) => {
       const dx = node.x - worldCoords.x;
       const dy = node.y - worldCoords.y;
-      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 5;
+      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 6;
     });
 
     if (hitNode) {
@@ -448,7 +470,6 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     }
   };
 
-  // Mouse Up: Release drag or pan
   const handleMouseUp = () => {
     if (dragNodeRef.current) {
       dragNodeRef.current.fx = null;
@@ -458,7 +479,6 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     isPanningRef.current = false;
   };
 
-  // Double click: Navigate to journal entry detail
   const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const screenCoords = getEventCoordinates(e);
     const worldCoords = screenToWorld(screenCoords.x, screenCoords.y);
@@ -466,7 +486,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     const hitNode = nodesRef.current.find((node) => {
       const dx = node.x - worldCoords.x;
       const dy = node.y - worldCoords.y;
-      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 5;
+      return Math.sqrt(dx * dx + dy * dy) <= node.radius + 6;
     });
 
     if (hitNode && hitNode.type === "journal" && hitNode.journalId) {
@@ -474,17 +494,15 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
     }
   };
 
-  // Zoom Handler
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    const zoomFactor = 1.1;
+    const zoomFactor = 1.08;
     const newScale = e.deltaY < 0 ? scale * zoomFactor : scale / zoomFactor;
-    setScale(Math.max(0.2, Math.min(newScale, 3.5)));
+    setScale(Math.max(0.25, Math.min(newScale, 3.0)));
   };
 
-  // Helper actions
-  const zoomIn = () => setScale((prev) => Math.min(prev * 1.25, 3.5));
-  const zoomOut = () => setScale((prev) => Math.max(prev / 1.25, 0.2));
+  const zoomIn = () => setScale((prev) => Math.min(prev * 1.2, 3.0));
+  const zoomOut = () => setScale((prev) => Math.max(prev / 1.2, 0.25));
   const resetViewport = () => {
     setScale(1);
     setPanX(dimensions.width / 2);
@@ -492,7 +510,6 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
   };
   const triggerRecenter = () => {
     if (nodesRef.current.length === 0) return;
-    // Calculate bounding box and average coordinates
     let avgX = 0;
     let avgY = 0;
     nodesRef.current.forEach((n) => {
@@ -520,9 +537,9 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
           {logs.length} Entry Graph
         </span>
         <span className="text-[9px] text-overlay font-light mt-1">
-          • Double-click log node to navigate<br />
-          • Click and drag nodes to structure<br />
-          • Scroll to Zoom, Drag canvas to Pan
+          • Double-click journal node to read details<br />
+          • Click & drag nodes to pull connections<br />
+          • Scroll wheel to Zoom, Drag background to Pan
         </span>
       </div>
 
@@ -558,7 +575,7 @@ export default function ObsidianGraph({ logs }: ObsidianGraphProps) {
         </button>
       </div>
 
-      {/* Legend Indicator Panel */}
+      {/* Legend Indicators */}
       <div className="absolute bottom-4 left-4 z-20 flex gap-4 bg-crust/70 px-3.5 py-2 rounded-2xl border border-surface/50 backdrop-blur-sm pointer-events-none">
         <div className="flex items-center gap-1.5 text-[10px]">
           <span className="w-2.5 h-2.5 rounded-full bg-[#cba6f7]" />
