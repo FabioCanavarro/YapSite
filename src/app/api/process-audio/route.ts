@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Parse Request Parameters
     const body = await request.json();
-    const { logId, removeFillerWords, enableSwearWords, customPrompt } = body;
+    const { logId, removeFillerWords, enableSwearWords, customPrompt, language, customMoods, categories, tags } = body;
 
     if (!logId) {
       return NextResponse.json({ error: "Bad Request: Missing logId parameter" }, { status: 400 });
@@ -105,9 +105,19 @@ export async function POST(request: NextRequest) {
       removeFillerWords: removeFillerWords ?? true,
       enableSwearWords: enableSwearWords ?? false,
       customPrompt: customPrompt ?? "",
+      language,
+      customMoods,
+      categories,
+      tags,
     });
 
-    // 7. Update the Database Record with AI Output (using admin client to prevent RLS update restrictions)
+    // 7. Extract existing custom tags to preserve them, but replace/add the category tag
+    const currentCustomTags = log.custom_tags || [];
+    const filteredCustomTags = currentCustomTags.filter((t: string) => !t.startsWith("_category:"));
+    const newCategoryTag = `_category:${aiResult.ai_category || "General"}`;
+    const updatedCustomTags = [...filteredCustomTags, newCategoryTag];
+
+    // 8. Update the Database Record with AI Output (using admin client to prevent RLS update restrictions)
     const { data: updatedLog, error: updateError } = await adminSupabase
       .from("journal_logs")
       .update({
@@ -116,6 +126,7 @@ export async function POST(request: NextRequest) {
         raw_transcript: aiResult.raw_transcript,
         tidied_log: aiResult.tidied_log,
         ai_tags: aiResult.ai_tags,
+        custom_tags: updatedCustomTags,
         processing_status: "completed",
       })
       .eq("id", logId)

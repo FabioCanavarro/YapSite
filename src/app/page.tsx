@@ -6,13 +6,17 @@ import { motion, AnimatePresence } from "framer-motion";
 import { 
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
-  Settings, ArrowUp, ArrowDown, SlidersHorizontal, X
+  Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
+  Plus, CheckSquare, Square, RefreshCw, BookOpen, GitFork, 
+  Play, StopCircle, HelpCircle, History
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { useOfflineSync } from "@/hooks/useOfflineSync";
 import YapHeatmap from "@/components/YapHeatmap";
 import BreathingRecorder from "@/components/BreathingRecorder";
+import ObsidianGraph from "@/components/ObsidianGraph";
+import MarkdownRenderer from "@/components/MarkdownRenderer";
 
 interface Log {
   id: string;
@@ -28,6 +32,79 @@ interface Log {
   created_at: string;
 }
 
+const defaultSettings = {
+  removeFillerWords: true,
+  enableSwearWords: false,
+  customPrompt: "",
+  language: "multidetect",
+  customMoods: [
+    { name: "Stressed", color: "#f38ba8" },
+    { name: "Calm", color: "#74c7ec" },
+    { name: "Focused", color: "#a6e3a1" },
+    { name: "Excited", color: "#cba6f7" },
+    { name: "Sad", color: "#89b4fa" },
+    { name: "Tired", color: "#fab387" }
+  ],
+  categories: {
+    mode: "open" as "open" | "flexible" | "strict",
+    list: ["School", "Work", "Personal", "Health", "Social"]
+  },
+  tags: {
+    mode: "open" as "open" | "flexible" | "strict",
+    list: ["memories", "coding", "troubles", "relationships", "ideas", "dreams"]
+  }
+};
+
+const DOCS_MARKDOWN = `
+# YapSite User Manual & Documentation 📘
+
+Welcome to YapSite, your ultimate companion for voice journaling. Here is how you can use all the advanced features.
+
+---
+
+## 📝 Markdown Styling
+
+You can use standard Markdown syntax in your reflections or when shape-shifting thoughts. The AI will also format your journal entries with Markdown:
+- Use \`# Heading 1\`, \`## Heading 2\`, and \`### Heading 3\` to structure your notes.
+- Use \`**bold text**\` to emphasize key words and \`*italic text*\` for emphasis.
+- Use \`---\` to add a beautiful horizontal line separator.
+- Start a line with \`- \` or \`* \` to create list items.
+
+---
+
+## 🗺️ Inline Obsidian Leaflet Maps
+
+You can insert interactive Leaflet Maps anywhere inside your journal thoughts or retroactive reflections using simple inline tokens.
+For example, type:
+\`[map: 38.7223, -9.1393, Lisbon, Portugal]\`
+
+This will render a full, interactive street-level map centered at the coordinates of Lisbon. Feel free to use it to record places you've visited, coffee shops you like, or memories in specific coordinates!
+
+---
+
+## 🧠 Categories vs. Tags
+
+YapSite separates broad and specific details:
+- **Broad Category**: Represents the general context (e.g. *School*, *Work*, *Health*, *Social*). Every journal has exactly one broad category.
+- **Specific Tags**: Specific details and themes (e.g. *exam stress*, *childhood memories*, *coding bugs*). Every journal can have multiple specific tags.
+
+### Constraint Strictness Modes
+For both Categories and Tags, you can configure the AI classification behavior in Settings:
+1. **Strict Mode**: The AI is forced to classify entries strictly using your predefined list. No new tags/categories will be created.
+2. **Flexible Mode**: The AI will try to map the entry to your list, but is free to create a new category/tag if none of them fit the emotional or semantic tone.
+3. **Open Mode**: The AI classifies entries freely and automatically appends any new category or tag to your settings list.
+
+---
+
+## 🚀 Background Processing & Batch Queue
+
+No need to wait for analysis:
+- **Minimize to Background**: When you record or upload audio, you can close the recorder and keep yapping. The processing runs as a server background task. You'll receive a system notification when it completes.
+- **Batch Re-Analysis**: Got multiple logs that you want to re-classify or re-analyze with your new system prompt? Use the **Batch & History** tab. Select multiple logs, click "Start Batch Re-analysis", and watch them process sequentially.
+- **Offline Sync**: If you record offline, entries are saved locally using IndexedDB and will automatically upload and process as soon as your device reconnects.
+- **Obsidian Sync**: Click "Obsidian Export" inside any journal entry to sync it directly with your local Obsidian vault using the \`obsidian://new\` protocol.
+`;
+
 export default function Dashboard() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
@@ -39,16 +116,40 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingPending, setIsProcessingPending] = useState(false);
 
+  // Tab navigation state
+  const [activeTab, setActiveTab] = useState<"dashboard" | "graph" | "batch" | "documentation">("dashboard");
+
   // Settings states
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [removeFillerWords, setRemoveFillerWords] = useState(true);
   const [enableSwearWords, setEnableSwearWords] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [language, setLanguage] = useState("multidetect");
+  
+  // Custom moods list
+  const [customMoods, setCustomMoods] = useState<{ name: string; color: string }[]>([]);
+  const [newMoodName, setNewMoodName] = useState("");
+  const [newMoodColor, setNewMoodColor] = useState("#cba6f7");
+
+  // Category and Tag constraint rules
+  const [categoriesConfig, setCategoriesConfig] = useState<{ mode: "open" | "flexible" | "strict"; list: string[] }>({ mode: "open", list: [] });
+  const [newCategoryName, setNewCategoryName] = useState("");
+
+  const [tagsConfig, setTagsConfig] = useState<{ mode: "open" | "flexible" | "strict"; list: string[] }>({ mode: "open", list: [] });
+  const [newTagName, setNewTagName] = useState("");
 
   // Sorting and rearranging states
   const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc' | 'size-desc' | 'size-asc' | 'custom'>('date-desc');
   const [isRearranging, setIsRearranging] = useState(false);
   const [customOrder, setCustomOrder] = useState<string[]>([]);
+
+  // Batch analysis states
+  const [selectedLogs, setSelectedLogs] = useState<string[]>([]);
+  const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+  const [batchCurrentIndex, setBatchCurrentIndex] = useState(0);
+  const [batchTotalCount, setBatchTotalCount] = useState(0);
+  const [batchCurrentTitle, setBatchCurrentTitle] = useState("");
+  const [historyLogs, setHistoryLogs] = useState<any[]>([]);
 
   // Initialize offline sync hook
   const { isOnline } = useOfflineSync(() => fetchLogs());
@@ -67,33 +168,102 @@ export default function Dashboard() {
     checkAuth();
   }, []);
 
-  // Load settings and custom order from localStorage on mount
+  // Load settings states and history from localStorage on mount
   useEffect(() => {
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings");
+      const saved = localStorage.getItem("yapsite_settings_v2");
+      let settings = defaultSettings;
       if (saved) {
         try {
-          const parsed = JSON.parse(saved);
-          setRemoveFillerWords(parsed.removeFillerWords ?? true);
-          setEnableSwearWords(parsed.enableSwearWords ?? false);
-          setCustomPrompt(parsed.customPrompt ?? "");
+          settings = JSON.parse(saved);
         } catch (e) {
-          console.error("Failed to parse settings", e);
+          console.error("Failed to parse settings_v2, using defaults", e);
         }
+      } else {
+        localStorage.setItem("yapsite_settings_v2", JSON.stringify(defaultSettings));
       }
+
+      setRemoveFillerWords(settings.removeFillerWords ?? true);
+      setEnableSwearWords(settings.enableSwearWords ?? false);
+      setCustomPrompt(settings.customPrompt ?? "");
+      setLanguage(settings.language ?? "multidetect");
+      setCustomMoods(settings.customMoods ?? defaultSettings.customMoods);
+      setCategoriesConfig(settings.categories ?? defaultSettings.categories);
+      setTagsConfig(settings.tags ?? defaultSettings.tags);
 
       const savedOrder = localStorage.getItem("yapsite_custom_order");
       if (savedOrder) {
         try {
           setCustomOrder(JSON.parse(savedOrder));
-        } catch (e) {
-          console.error("Failed to parse custom order", e);
-        }
+        } catch (e) {}
       }
+
+      loadHistory();
     }
   }, []);
 
-  // Fetch journal entries once user state is confirmed
+  const loadHistory = () => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("yapsite_analysis_history");
+      if (saved) {
+        try {
+          setHistoryLogs(JSON.parse(saved));
+        } catch (e) {}
+      }
+    }
+  };
+
+  const addHistoryEntry = (entry: { action: string; title: string; status: "success" | "failed"; error?: string }) => {
+    if (typeof window === "undefined") return;
+    const current = localStorage.getItem("yapsite_analysis_history");
+    const parsed = current ? JSON.parse(current) : [];
+    const newEntry = {
+      id: Math.random().toString(36).substring(7),
+      timestamp: new Date().toISOString(),
+      ...entry
+    };
+    const updated = [newEntry, ...parsed].slice(0, 100);
+    localStorage.setItem("yapsite_analysis_history", JSON.stringify(updated));
+    setHistoryLogs(updated);
+  };
+
+  const clearHistory = () => {
+    if (typeof window === "undefined") return;
+    localStorage.removeItem("yapsite_analysis_history");
+    setHistoryLogs([]);
+    toast.success("Run history logs cleared.");
+  };
+
+  // Unified settings save helper
+  const saveSettings = (updatedFields: any) => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem("yapsite_settings_v2");
+    const current = saved ? JSON.parse(saved) : defaultSettings;
+
+    const merged = {
+      ...current,
+      removeFillerWords,
+      enableSwearWords,
+      customPrompt,
+      language,
+      customMoods,
+      categories: categoriesConfig,
+      tags: tagsConfig,
+      ...updatedFields
+    };
+
+    localStorage.setItem("yapsite_settings_v2", JSON.stringify(merged));
+
+    if (updatedFields.removeFillerWords !== undefined) setRemoveFillerWords(updatedFields.removeFillerWords);
+    if (updatedFields.enableSwearWords !== undefined) setEnableSwearWords(updatedFields.enableSwearWords);
+    if (updatedFields.customPrompt !== undefined) setCustomPrompt(updatedFields.customPrompt);
+    if (updatedFields.language !== undefined) setLanguage(updatedFields.language);
+    if (updatedFields.customMoods !== undefined) setCustomMoods(updatedFields.customMoods);
+    if (updatedFields.categories !== undefined) setCategoriesConfig(updatedFields.categories);
+    if (updatedFields.tags !== undefined) setTagsConfig(updatedFields.tags);
+  };
+
+  // Fetch logs once user state is confirmed
   useEffect(() => {
     if (user) {
       fetchLogs();
@@ -141,12 +311,30 @@ export default function Dashboard() {
             logId: log.id, 
             removeFillerWords,
             enableSwearWords,
-            customPrompt
+            customPrompt,
+            language,
+            customMoods,
+            categories: categoriesConfig,
+            tags: tagsConfig,
           }),
         });
 
         if (res.ok) {
           const processed = await res.json();
+
+          // Auto-register spouted labels
+          if (processed) {
+            const categoryTag = processed.custom_tags?.find((t: string) => t.startsWith("_category:"));
+            const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+            registerNewCategoryAndTags(categoryName, processed.ai_tags || []);
+          }
+
+          addHistoryEntry({
+            action: "Background Processing",
+            title: processed.ai_title || "Untitled",
+            status: "success",
+          });
+
           // Trigger browser notification
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
             new Notification("YapSite Journal Processed", {
@@ -156,12 +344,50 @@ export default function Dashboard() {
           }
           toast.success(`Background audio processing complete: "${processed.ai_title}"`);
           fetchLogs();
+        } else {
+          addHistoryEntry({
+            action: "Background Processing",
+            title: log.ai_title || "Pending Entry",
+            status: "failed",
+            error: `Server responded with ${res.status}`,
+          });
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error("Silent sync failed for", log.id, err);
+        addHistoryEntry({
+          action: "Background Processing",
+          title: log.ai_title || "Pending Entry",
+          status: "failed",
+          error: err.message || String(err),
+        });
       }
     }
     setIsProcessingPending(false);
+  };
+
+  const registerNewCategoryAndTags = (category: string, tags: string[]) => {
+    if (typeof window === "undefined") return;
+    const saved = localStorage.getItem("yapsite_settings_v2");
+    if (!saved) return;
+    try {
+      const parsed = JSON.parse(saved);
+      let changed = false;
+      if (category && !parsed.categories.list.includes(category)) {
+        parsed.categories.list.push(category);
+        changed = true;
+      }
+      tags.forEach((tag) => {
+        if (tag && !parsed.tags.list.includes(tag)) {
+          parsed.tags.list.push(tag);
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsed));
+        setCategoriesConfig(parsed.categories);
+        setTagsConfig(parsed.tags);
+      }
+    } catch (e) {}
   };
 
   // Auth logins
@@ -291,9 +517,108 @@ export default function Dashboard() {
     });
   }, [logs, searchQuery, selectedMood, sortBy, customOrder]);
 
+  // Batch analysis handlers
+  const toggleSelectLog = (id: string) => {
+    setSelectedLogs(prev => 
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleSelectAll = () => {
+    setSelectedLogs(filteredLogs.filter(l => l.processing_status === "completed").map(l => l.id));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedLogs([]);
+  };
+
+  const startBatchReanalysis = async () => {
+    if (selectedLogs.length === 0) return;
+    setIsProcessingBatch(true);
+    setBatchTotalCount(selectedLogs.length);
+    setBatchCurrentIndex(0);
+
+    toast.loading(`Processing batch re-analysis queue of ${selectedLogs.length} entries...`, { id: "batch-run" });
+
+    // Cancel state reference
+    const cancelRef = { cancelled: false };
+    (window as any).cancelActiveBatch = () => {
+      cancelRef.cancelled = true;
+    };
+
+    let successes = 0;
+    let failures = 0;
+
+    for (let i = 0; i < selectedLogs.length; i++) {
+      if (cancelRef.cancelled) {
+        toast.warning("Batch analysis cancelled by user", { id: "batch-run" });
+        break;
+      }
+
+      const logId = selectedLogs[i];
+      const logItem = logs.find(l => l.id === logId);
+      if (!logItem) continue;
+
+      setBatchCurrentIndex(i);
+      setBatchCurrentTitle(logItem.ai_title || "Untitled Entry");
+
+      try {
+        const res = await fetch("/api/process-audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            logId,
+            removeFillerWords,
+            enableSwearWords,
+            customPrompt,
+            language,
+            customMoods,
+            categories: categoriesConfig,
+            tags: tagsConfig
+          })
+        });
+
+        if (!res.ok) {
+          throw new Error(`Process error: server returned status ${res.status}`);
+        }
+
+        const processed = await res.json();
+        successes++;
+
+        // Auto register
+        if (processed) {
+          const categoryTag = processed.custom_tags?.find((t: string) => t.startsWith("_category:"));
+          const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+          registerNewCategoryAndTags(categoryName, processed.ai_tags || []);
+        }
+
+        addHistoryEntry({
+          action: "Batch Re-analysis",
+          title: logItem.ai_title || "Untitled Entry",
+          status: "success",
+        });
+
+      } catch (err: any) {
+        console.error("Batch processing failed for", logId, err);
+        failures++;
+        addHistoryEntry({
+          action: "Batch Re-analysis",
+          title: logItem.ai_title || "Untitled Entry",
+          status: "failed",
+          error: err.message || String(err)
+        });
+      }
+    }
+
+    setIsProcessingBatch(false);
+    setSelectedLogs([]);
+    toast.success(`Batch queue processed! successes: ${successes}, failures: ${failures}`, { id: "batch-run" });
+    fetchLogs();
+  };
+
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-base">
+      <div className="flex-1 flex items-center justify-center bg-base min-h-screen">
         <Loader2 className="w-8 h-8 text-hype animate-spin" />
       </div>
     );
@@ -302,7 +627,7 @@ export default function Dashboard() {
   // Welcome Screen (Unauthenticated)
   if (!user) {
     return (
-      <div className="flex-1 flex flex-col justify-center items-center bg-base p-6 relative overflow-hidden">
+      <div className="flex-1 flex flex-col justify-center items-center bg-base min-h-screen p-6 relative overflow-hidden">
         {/* Soft decorative background glows */}
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] rounded-full bg-hype/10 blur-3xl" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] rounded-full bg-calm/10 blur-3xl" />
@@ -344,13 +669,13 @@ export default function Dashboard() {
           >
             <button
               onClick={handleGitHubLogin}
-              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer"
+              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm"
             >
               Sign In with GitHub
             </button>
             <button
               onClick={handleGoogleLogin}
-              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer"
+              className="w-full py-3.5 px-6 rounded-2xl bg-surface hover:bg-surface/80 border border-overlay/10 text-text font-medium flex items-center justify-center gap-3 transition-all duration-200 cursor-pointer text-sm"
             >
               Sign In with Google
             </button>
@@ -402,12 +727,12 @@ export default function Dashboard() {
       {/* Settings Modal */}
       <AnimatePresence>
         {isSettingsOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80 backdrop-blur-md p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/85 backdrop-blur-md p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              className="w-full max-w-lg glass-panel p-6 rounded-3xl border border-hype/20 flex flex-col gap-5 shadow-xl"
+              className="w-full max-w-lg glass-panel p-6 rounded-3xl border border-hype/20 flex flex-col gap-4 shadow-xl max-h-[85vh] overflow-y-auto"
             >
               <div className="flex justify-between items-center border-b border-surface pb-3">
                 <h3 className="text-lg font-bold text-text flex items-center gap-2">
@@ -423,46 +748,225 @@ export default function Dashboard() {
               </div>
 
               {/* Toggles */}
-              <div className="flex flex-col gap-4">
-                <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
-                  <div className="flex flex-col gap-0.5 pr-2">
-                    <span className="text-xs font-bold text-text">Remove Filler Words</span>
-                    <span className="text-[10px] text-overlay">Strips 'um', 'uh', 'like', 'you know' from transcript</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={removeFillerWords}
-                    onChange={(e) => {
-                      setRemoveFillerWords(e.target.checked);
-                      localStorage.setItem("yapsite_settings", JSON.stringify({
-                        removeFillerWords: e.target.checked,
-                        enableSwearWords,
-                        customPrompt
-                      }));
-                    }}
-                    className="w-5 h-5 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
-                  />
-                </label>
+              <div className="flex flex-col gap-4 text-left">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
+                    <div className="flex flex-col gap-0.5 pr-2">
+                      <span className="text-xs font-bold text-text">Remove Fillers</span>
+                      <span className="text-[9px] text-overlay">Strips filler terms like 'um'</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={removeFillerWords}
+                      onChange={(e) => saveSettings({ removeFillerWords: e.target.checked })}
+                      className="w-4 h-4 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
+                    />
+                  </label>
 
-                <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
-                  <div className="flex flex-col gap-0.5 pr-2">
-                    <span className="text-xs font-bold text-text">Enable Swear Words</span>
-                    <span className="text-[10px] text-overlay">Retain curse words in transcript and tidied thoughts</span>
+                  <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
+                    <div className="flex flex-col gap-0.5 pr-2">
+                      <span className="text-xs font-bold text-text">Enable Swear Words</span>
+                      <span className="text-[9px] text-overlay">Keep raw curse words</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={enableSwearWords}
+                      onChange={(e) => saveSettings({ enableSwearWords: e.target.checked })}
+                      className="w-4 h-4 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
+                    />
+                  </label>
+                </div>
+
+                {/* Language Selector */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-text">Transcription Language</label>
+                  <select
+                    value={language}
+                    onChange={(e) => saveSettings({ language: e.target.value })}
+                    className="w-full p-2.5 bg-crust rounded-xl border border-overlay/10 text-text text-xs focus:outline-none cursor-pointer"
+                  >
+                    <option value="multidetect">Auto-Detect (Multi-language detect)</option>
+                    <option value="auto">Auto-Detect (Single-language Whisper)</option>
+                    <option value="en">English (US/UK)</option>
+                    <option value="pt">Portuguese (Portugal/Brazil)</option>
+                    <option value="es">Spanish (Spain/LATAM)</option>
+                    <option value="fr">French (France)</option>
+                    <option value="de">German (Germany)</option>
+                    <option value="it">Italian (Italy)</option>
+                    <option value="ja">Japanese (Japan)</option>
+                    <option value="zh">Chinese (Mandarin)</option>
+                  </select>
+                </div>
+
+                {/* Custom Moods and Accents */}
+                <div className="flex flex-col gap-2 border border-surface p-3 rounded-2xl bg-crust/50">
+                  <span className="text-xs font-bold text-text">Custom Moods & Accents</span>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+                    {customMoods.map((mood, index) => (
+                      <span 
+                        key={index} 
+                        className="text-[9px] px-2 py-0.5 rounded-full border flex items-center gap-1 text-text/90"
+                        style={{ borderColor: mood.color + "40", backgroundColor: mood.color + "15" }}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: mood.color }} />
+                        <span>{mood.name}</span>
+                        <button
+                          onClick={() => {
+                            const updated = customMoods.filter((_, i) => i !== index);
+                            saveSettings({ customMoods: updated });
+                          }}
+                          className="hover:text-stressed text-overlay cursor-pointer ml-0.5 text-[8px]"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
                   </div>
-                  <input
-                    type="checkbox"
-                    checked={enableSwearWords}
-                    onChange={(e) => {
-                      setEnableSwearWords(e.target.checked);
-                      localStorage.setItem("yapsite_settings", JSON.stringify({
-                        removeFillerWords,
-                        enableSwearWords: e.target.checked,
-                        customPrompt
-                      }));
-                    }}
-                    className="w-5 h-5 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
-                  />
-                </label>
+                  {/* Add mood inline form */}
+                  <div className="flex gap-1.5 items-center mt-1">
+                    <input 
+                      type="text" 
+                      placeholder="Add mood (e.g. Grateful)" 
+                      value={newMoodName} 
+                      onChange={(e) => setNewMoodName(e.target.value)}
+                      className="bg-crust border border-overlay/10 text-[10px] text-text p-1.5 rounded-xl flex-1 focus:outline-none"
+                    />
+                    <input 
+                      type="color" 
+                      value={newMoodColor} 
+                      onChange={(e) => setNewMoodColor(e.target.value)}
+                      className="w-7 h-7 p-0.5 rounded-lg border border-overlay/10 bg-transparent cursor-pointer shrink-0"
+                    />
+                    <button
+                      onClick={() => {
+                        if (!newMoodName.trim()) return;
+                        const exists = customMoods.some(m => m.name.toLowerCase() === newMoodName.trim().toLowerCase());
+                        if (exists) {
+                          toast.error("Mood name already exists");
+                          return;
+                        }
+                        const updated = [...customMoods, { name: newMoodName.trim(), color: newMoodColor }];
+                        saveSettings({ customMoods: updated });
+                        setNewMoodName("");
+                      }}
+                      className="p-1.5 bg-hype text-crust text-[10px] font-bold rounded-xl hover:bg-hype/80 cursor-pointer"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {/* Categories Constraint Rules */}
+                <div className="flex flex-col gap-2 border border-surface p-3 rounded-2xl bg-crust/50">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-text">Broad Category Tags</span>
+                    <select
+                      value={categoriesConfig.mode}
+                      onChange={(e) => {
+                        const mode = e.target.value as any;
+                        saveSettings({ categories: { ...categoriesConfig, mode } });
+                      }}
+                      className="bg-crust text-[9px] font-bold text-hype border border-overlay/10 px-1 py-0.5 rounded focus:outline-none cursor-pointer"
+                    >
+                      <option value="open">Open (Auto spout & register)</option>
+                      <option value="flexible">Flexible (Prioritize list, then generate)</option>
+                      <option value="strict">Strict (Strict list match)</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                    {categoriesConfig.list.map((cat, index) => (
+                      <span key={index} className="text-[9px] bg-crust text-text/80 px-2 py-0.5 rounded border border-surface/50 flex items-center gap-1">
+                        <span>{cat}</span>
+                        <button
+                          onClick={() => {
+                            const updated = categoriesConfig.list.filter((_, i) => i !== index);
+                            saveSettings({ categories: { ...categoriesConfig, list: updated } });
+                          }}
+                          className="text-overlay hover:text-stressed text-[8px] cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5 items-center mt-1">
+                    <input 
+                      type="text" 
+                      placeholder="Add Category..." 
+                      value={newCategoryName} 
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      className="bg-crust border border-overlay/10 text-[10px] text-text p-1.5 rounded-xl flex-1 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        if (!newCategoryName.trim()) return;
+                        if (categoriesConfig.list.includes(newCategoryName.trim())) return;
+                        const updatedList = [...categoriesConfig.list, newCategoryName.trim()];
+                        saveSettings({ categories: { ...categoriesConfig, list: updatedList } });
+                        setNewCategoryName("");
+                      }}
+                      className="p-1.5 bg-hype text-crust text-[10px] font-bold rounded-xl hover:bg-hype/80 cursor-pointer"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tags Constraint Rules */}
+                <div className="flex flex-col gap-2 border border-surface p-3 rounded-2xl bg-crust/50">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-text">Specific Tag Rules</span>
+                    <select
+                      value={tagsConfig.mode}
+                      onChange={(e) => {
+                        const mode = e.target.value as any;
+                        saveSettings({ tags: { ...tagsConfig, mode } });
+                      }}
+                      className="bg-crust text-[9px] font-bold text-hype border border-overlay/10 px-1 py-0.5 rounded focus:outline-none cursor-pointer"
+                    >
+                      <option value="open">Open Mode</option>
+                      <option value="flexible">Flexible Mode</option>
+                      <option value="strict">Strict Mode</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto">
+                    {tagsConfig.list.map((tag, index) => (
+                      <span key={index} className="text-[9px] bg-crust text-text/80 px-2 py-0.5 rounded border border-surface/50 flex items-center gap-1">
+                        <span>#{tag}</span>
+                        <button
+                          onClick={() => {
+                            const updated = tagsConfig.list.filter((_, i) => i !== index);
+                            saveSettings({ tags: { ...tagsConfig, list: updated } });
+                          }}
+                          className="text-overlay hover:text-stressed text-[8px] cursor-pointer"
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-1.5 items-center mt-1">
+                    <input 
+                      type="text" 
+                      placeholder="Add specific tag..." 
+                      value={newTagName} 
+                      onChange={(e) => setNewTagName(e.target.value)}
+                      className="bg-crust border border-overlay/10 text-[10px] text-text p-1.5 rounded-xl flex-1 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        if (!newTagName.trim()) return;
+                        if (tagsConfig.list.includes(newTagName.trim())) return;
+                        const updatedList = [...tagsConfig.list, newTagName.trim()];
+                        saveSettings({ tags: { ...tagsConfig, list: updatedList } });
+                        setNewTagName("");
+                      }}
+                      className="p-1.5 bg-hype text-crust text-[10px] font-bold rounded-xl hover:bg-hype/80 cursor-pointer"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
 
                 {/* Custom System Prompt Instructions */}
                 <div className="flex flex-col gap-1.5">
@@ -470,13 +974,7 @@ export default function Dashboard() {
                     <label className="text-xs font-bold text-text">Custom AI Prompt Instructions</label>
                     <button
                       onClick={() => {
-                        const defaultPrompt = "";
-                        setCustomPrompt(defaultPrompt);
-                        localStorage.setItem("yapsite_settings", JSON.stringify({
-                          removeFillerWords,
-                          enableSwearWords,
-                          customPrompt: defaultPrompt
-                        }));
+                        saveSettings({ customPrompt: "" });
                         toast.info("Prompt reset to default instructions");
                       }}
                       className="text-[10px] text-hype font-semibold hover:underline cursor-pointer"
@@ -487,14 +985,7 @@ export default function Dashboard() {
                   <textarea
                     placeholder="Enter custom formatting style. E.g. 'Format this like a deep psychological reflection. Use bullet points for key realizations. End with a list of actionable steps for tomorrow.'"
                     value={customPrompt}
-                    onChange={(e) => {
-                      setCustomPrompt(e.target.value);
-                      localStorage.setItem("yapsite_settings", JSON.stringify({
-                        removeFillerWords,
-                        enableSwearWords,
-                        customPrompt: e.target.value
-                      }));
-                    }}
+                    onChange={(e) => saveSettings({ customPrompt: e.target.value })}
                     rows={4}
                     className="w-full p-3 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-xs leading-relaxed resize-none font-sans"
                   />
@@ -514,282 +1005,485 @@ export default function Dashboard() {
         )}
       </AnimatePresence>
 
-      {/* Main Content (Responsive Laptop / Mobile Canvas) */}
+      {/* Main Content (Responsive Canvas) */}
       <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6">
-        {/* Heatmap Grid */}
-        <YapHeatmap logs={logs} />
-
-        {/* Search and Filters */}
-        <div className="flex flex-col gap-3">
-          <div className="relative">
-            <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-overlay" />
-            <input
-              type="text"
-              placeholder="Search title, content, or tags..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 bg-surface rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm transition-colors duration-200"
-            />
-          </div>
-
-          {/* Sorting and Rearrange Row */}
-          <div className="flex flex-wrap gap-2.5 items-center justify-between">
-            <div className="flex items-center gap-1.5 bg-surface border border-overlay/10 rounded-2xl px-3.5 py-2 shrink-0">
-              <SlidersHorizontal className="w-3.5 h-3.5 text-overlay" />
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as any)}
-                className="bg-transparent text-text text-xs focus:outline-none cursor-pointer pr-1"
-              >
-                <option value="date-desc">Newest Date</option>
-                <option value="date-asc">Oldest Date</option>
-                <option value="title-asc">Title (A-Z)</option>
-                <option value="title-desc">Title (Z-A)</option>
-                <option value="size-desc">File Size (Large)</option>
-                <option value="size-asc">File Size (Small)</option>
-                <option value="custom">Custom Order</option>
-              </select>
-            </div>
-
+        
+        {/* Navigation Tabs */}
+        <div className="flex bg-surface border border-overlay/10 rounded-2xl p-1 overflow-x-auto gap-1">
+          {[
+            { id: "dashboard", label: "Dashboard" },
+            { id: "graph", label: "Mind Graph" },
+            { id: "batch", label: "Batch & History" },
+            { id: "documentation", label: "Documentation" }
+          ].map((tab) => (
             <button
-              onClick={() => {
-                setIsRearranging(!isRearranging);
-                if (!isRearranging) {
-                  setSortBy('custom');
-                  toast.info("Rearrange active: Use arrows on logs to order them manually");
-                }
-              }}
-              className={`text-xs px-3.5 py-2 rounded-2xl border transition-all duration-200 flex items-center gap-1.5 cursor-pointer font-semibold ${
-                isRearranging
-                  ? "bg-hype text-crust border-hype"
-                  : "bg-surface text-text border-overlay/10 hover:border-hype/30"
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer shrink-0 ${
+                activeTab === tab.id
+                  ? "bg-hype text-crust shadow-md scale-102"
+                  : "text-text hover:text-hype hover:bg-crust/50"
               }`}
             >
-              <span>Rearrange Logs</span>
+              {tab.label}
             </button>
-          </div>
-
-          {/* Tag / Mood Filter pills */}
-          <div className="flex gap-2 items-center overflow-x-auto pb-1 scrollbar-none">
-            <button
-              onClick={() => setSelectedMood(null)}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 transition-all duration-200 cursor-pointer ${
-                selectedMood === null
-                  ? "bg-text text-crust border-text font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              All Moods
-            </button>
-            <button
-              onClick={() => setSelectedMood("#f38ba8")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#f38ba8"
-                  ? "bg-stressed text-crust border-stressed font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-stressed" /> Stressed
-            </button>
-            <button
-              onClick={() => setSelectedMood("#74c7ec")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#74c7ec"
-                  ? "bg-calm text-crust border-calm font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-calm" /> Calm
-            </button>
-            <button
-              onClick={() => setSelectedMood("#a6e3a1")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#a6e3a1"
-                  ? "bg-productive text-crust border-productive font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-productive" /> Focused
-            </button>
-            <button
-              onClick={() => setSelectedMood("#cba6f7")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#cba6f7"
-                  ? "bg-hype text-crust border-hype font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-hype" /> Excited
-            </button>
-            <button
-              onClick={() => setSelectedMood("#89b4fa")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#89b4fa"
-                  ? "bg-sky-500 text-crust border-sky-500 font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-[rgba(137,180,250,1)]" /> Sad
-            </button>
-            <button
-              onClick={() => setSelectedMood("#fab387")}
-              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
-                selectedMood === "#fab387"
-                  ? "bg-orange-400 text-crust border-orange-400 font-semibold"
-                  : "bg-surface text-text border-overlay/10"
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-[rgba(250,179,135,1)]" /> Tired
-            </button>
-          </div>
+          ))}
         </div>
 
-        {/* Entries Header */}
-        <div className="flex justify-between items-center">
-          <h2 className="text-md font-bold tracking-wide text-text uppercase">
-            Journal Entries
-          </h2>
-          <span className="text-xs text-overlay font-light">
-            Showing {filteredLogs.length} entries
-          </span>
-        </div>
+        {/* Tab Render Switcher */}
+        {activeTab === "dashboard" && (
+          <div className="flex flex-col gap-6">
+            {/* Heatmap Grid */}
+            <YapHeatmap logs={logs} />
 
-        {/* Logs List Container (Responsive Grid: 1 col on mobile, 2 cols on laptop) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <AnimatePresence mode="popLayout">
-            {filteredLogs.length === 0 ? (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="col-span-1 md:col-span-2 glass-panel rounded-3xl p-8 text-center text-overlay text-sm font-light"
-              >
-                No journals match your search filters.
-              </motion.div>
-            ) : (
-              filteredLogs.map((log, index) => {
-                const dateStr = new Date(log.created_at).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit"
-                });
+            {/* Search and Filters */}
+            <div className="flex flex-col gap-3">
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-overlay" />
+                <input
+                  type="text"
+                  placeholder="Search title, content, categories, or tags..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-11 pr-4 py-3 bg-surface rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm transition-colors duration-200"
+                />
+              </div>
 
-                const sizeTag = log.custom_tags?.find((t) => t.startsWith("_filesize:"));
-                let formattedSize = "";
-                if (sizeTag) {
-                  const bytes = parseInt(sizeTag.split(":")[1], 10);
-                  if (!isNaN(bytes)) {
-                    if (bytes > 1024 * 1024) {
-                      formattedSize = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-                    } else {
-                      formattedSize = `${(bytes / 1024).toFixed(0)} KB`;
+              {/* Sorting and Rearrange Row */}
+              <div className="flex flex-wrap gap-2.5 items-center justify-between">
+                <div className="flex items-center gap-1.5 bg-surface border border-overlay/10 rounded-2xl px-3.5 py-2 shrink-0">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-overlay" />
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="bg-transparent text-text text-xs focus:outline-none cursor-pointer pr-1"
+                  >
+                    <option value="date-desc">Newest Date</option>
+                    <option value="date-asc">Oldest Date</option>
+                    <option value="title-asc">Title (A-Z)</option>
+                    <option value="title-desc">Title (Z-A)</option>
+                    <option value="size-desc">File Size (Large)</option>
+                    <option value="size-asc">File Size (Small)</option>
+                    <option value="custom">Custom Order</option>
+                  </select>
+                </div>
+
+                <button
+                  onClick={() => {
+                    setIsRearranging(!isRearranging);
+                    if (!isRearranging) {
+                      setSortBy('custom');
+                      toast.info("Rearrange active: Use arrows on logs to order them manually");
                     }
-                  }
-                }
+                  }}
+                  className={`text-xs px-3.5 py-2 rounded-2xl border transition-all duration-200 flex items-center gap-1.5 cursor-pointer font-semibold ${
+                    isRearranging
+                      ? "bg-hype text-crust border-hype"
+                      : "bg-surface text-text border-overlay/10 hover:border-hype/30"
+                  }`}
+                >
+                  <span>Rearrange Logs</span>
+                </button>
+              </div>
 
-                return (
-                  <motion.div
-                    key={log.id}
-                    layout
-                    initial={{ opacity: 0, y: 15 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.95 }}
-                    transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
-                    onClick={() => router.push(`/journal/${log.id}`)}
-                    className="w-full relative overflow-hidden rounded-3xl p-5 cursor-pointer glass-panel glass-panel-hover flex flex-col gap-3 group"
+              {/* Tag / Mood Filter pills */}
+              <div className="flex gap-2 items-center overflow-x-auto pb-1 scrollbar-none">
+                <button
+                  onClick={() => setSelectedMood(null)}
+                  className={`text-xs px-3.5 py-2 rounded-full border shrink-0 transition-all duration-200 cursor-pointer ${
+                    selectedMood === null
+                      ? "bg-text text-crust border-text font-semibold"
+                      : "bg-surface text-text border-overlay/10"
+                  }`}
+                >
+                  All Moods
+                </button>
+                {customMoods.map((mood) => (
+                  <button
+                    key={mood.color}
+                    onClick={() => setSelectedMood(mood.color)}
+                    className="text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer"
                     style={{
-                      borderLeft: `4px solid ${log.ai_mood_color || "#313244"}`,
+                      backgroundColor: selectedMood === mood.color ? mood.color : "transparent",
+                      color: selectedMood === mood.color ? "#11111b" : "#cdd6f4",
+                      borderColor: selectedMood === mood.color ? mood.color : "rgba(76, 79, 105, 0.1)"
                     }}
                   >
-                    {/* Background glow tint matching the mood color */}
-                    <div
-                      className="absolute inset-0 opacity-[0.03] group-hover:opacity-[0.06] transition-opacity duration-300 pointer-events-none"
-                      style={{ backgroundColor: log.ai_mood_color || "transparent" }}
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full" 
+                      style={{ backgroundColor: selectedMood === mood.color ? "#11111b" : mood.color }} 
                     />
+                    <span>{mood.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
 
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 mb-1 flex-wrap">
-                          <span className="text-[10px] text-overlay font-light uppercase tracking-wider flex items-center gap-1 shrink-0">
-                            <Calendar className="w-3 h-3" />
-                            {dateStr}
-                          </span>
-                          {formattedSize && (
-                            <span className="text-[9px] text-overlay font-mono bg-crust/50 px-1.5 py-0.5 rounded border border-surface shrink-0">
-                              {formattedSize}
-                            </span>
-                          )}
-                          {log.processing_status === "pending" && (
-                            <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse shrink-0">
-                              Processing...
-                            </span>
-                          )}
-                        </div>
-                        <h3 className="text-md font-bold text-text group-hover:text-hype transition-colors duration-200 leading-snug truncate pr-6">
-                          {log.ai_title || "Untitled Entry"}
-                        </h3>
-                      </div>
-                      
-                      {/* Rearrange arrows */}
-                      {isRearranging && (
-                        <div className="flex items-center gap-1 z-20 shrink-0">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              moveLog(log.id, 'up');
-                            }}
-                            className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              moveLog(log.id, 'down');
-                            }}
-                            className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      )}
+            {/* Entries Header */}
+            <div className="flex justify-between items-center">
+              <h2 className="text-md font-bold tracking-wide text-text uppercase">
+                Journal Entries
+              </h2>
+              <span className="text-xs text-overlay font-light">
+                Showing {filteredLogs.length} entries
+              </span>
+            </div>
 
-                      <button
-                        onClick={(e) => deleteEntry(log.id, e)}
-                        className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer shrink-0 z-20"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-
-                    <p className="text-xs text-text/80 line-clamp-2 leading-relaxed">
-                      {log.tidied_log}
-                    </p>
-
-                    {/* Tag Pills */}
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      {log.ai_tags?.map((tag, tIdx) => (
-                        <span
-                          key={tIdx}
-                          className="text-[10px] px-2.5 py-0.5 rounded-full bg-crust text-text/70 border border-surface"
-                        >
-                          #{tag}
-                        </span>
-                      ))}
-                    </div>
+            {/* Logs List Container */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <AnimatePresence mode="popLayout">
+                {filteredLogs.length === 0 ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="col-span-1 md:col-span-2 glass-panel rounded-3xl p-8 text-center text-overlay text-sm font-light"
+                  >
+                    No journals match your search filters.
                   </motion.div>
-                );
-              })
-            )}
-          </AnimatePresence>
-        </div>
+                ) : (
+                  filteredLogs.map((log, index) => {
+                    const dateStr = new Date(log.created_at).toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    });
+
+                    const sizeTag = log.custom_tags?.find((t) => t.startsWith("_filesize:"));
+                    let formattedSize = "";
+                    if (sizeTag) {
+                      const bytes = parseInt(sizeTag.split(":")[1], 10);
+                      if (!isNaN(bytes)) {
+                        if (bytes > 1024 * 1024) {
+                          formattedSize = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                        } else {
+                          formattedSize = `${(bytes / 1024).toFixed(0)} KB`;
+                        }
+                      }
+                    }
+
+                    return (
+                      <motion.div
+                        key={log.id}
+                        layout
+                        initial={{ opacity: 0, y: 15 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        transition={{ duration: 0.3, delay: Math.min(index * 0.05, 0.3) }}
+                        onClick={() => router.push(`/journal/${log.id}`)}
+                        className="w-full relative overflow-hidden rounded-3xl p-5 cursor-pointer glass-panel glass-panel-hover flex flex-col gap-3 group text-left"
+                        style={{
+                          borderLeft: `4px solid ${log.ai_mood_color || "#313244"}`,
+                        }}
+                      >
+                        {/* Background glow tint matching the mood color */}
+                        <div
+                          className="absolute inset-0 opacity-[0.03] group-hover:opacity-[0.06] transition-opacity duration-300 pointer-events-none"
+                          style={{ backgroundColor: log.ai_mood_color || "transparent" }}
+                        />
+
+                        <div className="flex justify-between items-start gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <span className="text-[10px] text-overlay font-light uppercase tracking-wider flex items-center gap-1 shrink-0">
+                                <Calendar className="w-3.5 h-3.5" />
+                                {dateStr}
+                              </span>
+                              {formattedSize && (
+                                <span className="text-[9px] text-overlay font-mono bg-crust/50 px-1.5 py-0.5 rounded border border-surface shrink-0">
+                                  {formattedSize}
+                                </span>
+                              )}
+                              {log.processing_status === "pending" && (
+                                <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse shrink-0">
+                                  Processing...
+                                </span>
+                              )}
+                            </div>
+                            <h3 className="text-md font-bold text-text group-hover:text-hype transition-colors duration-200 leading-snug truncate pr-6">
+                              {log.ai_title || "Untitled Entry"}
+                            </h3>
+                          </div>
+                          
+                          {/* Rearrange arrows */}
+                          {isRearranging && (
+                            <div className="flex items-center gap-1 z-20 shrink-0">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  moveLog(log.id, 'up');
+                                }}
+                                className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  moveLog(log.id, 'down');
+                                }}
+                                className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+
+                          <button
+                            onClick={(e) => deleteEntry(log.id, e)}
+                            className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer shrink-0 z-20"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <p className="text-xs text-text/80 line-clamp-2 leading-relaxed">
+                          {log.tidied_log}
+                        </p>
+
+                        {/* Tag Pills */}
+                        <div className="flex flex-wrap gap-1.5 mt-2 items-center">
+                          {/* Category Tag Display */}
+                          {(() => {
+                            const categoryTag = log.custom_tags?.find((t) => t.startsWith("_category:"));
+                            const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+                            return (
+                              <span className="text-[9px] px-2 py-0.5 rounded bg-hype/15 text-hype font-bold border border-hype/10 uppercase tracking-wider">
+                                {categoryName}
+                              </span>
+                            );
+                          })()}
+
+                          {log.ai_tags?.map((tag, tIdx) => (
+                            <span
+                              key={tIdx}
+                              className="text-[9px] px-2.5 py-0.5 rounded-full bg-crust text-text/70 border border-surface"
+                            >
+                              #{tag}
+                            </span>
+                          ))}
+                        </div>
+                      </motion.div>
+                    );
+                  })
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
+        )}
+
+        {/* Tab Graph */}
+        {activeTab === "graph" && (
+          <div className="flex flex-col gap-4">
+            <h2 className="text-md font-bold tracking-wide text-text uppercase text-left">
+              Mind Obsidian Graph
+            </h2>
+            <ObsidianGraph logs={logs.filter(l => l.processing_status === "completed")} />
+          </div>
+        )}
+
+        {/* Tab Batch queue & run history logs */}
+        {activeTab === "batch" && (
+          <div className="flex flex-col gap-6 text-left">
+            {/* Batch processing panel */}
+            <div className="w-full rounded-3xl p-6 glass-panel border border-surface/50 flex flex-col gap-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-md font-bold text-text">Batch Re-Analysis Queue</h3>
+                  <p className="text-[11px] text-overlay font-light mt-0.5">
+                    Select multiple audio journals to re-run AI processing with your current prompts/rules.
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSelectAll}
+                    className="px-3 py-1.5 border border-surface hover:text-hype text-text text-xs rounded-xl cursor-pointer"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    onClick={handleDeselectAll}
+                    className="px-3 py-1.5 border border-surface hover:text-hype text-text text-xs rounded-xl cursor-pointer"
+                  >
+                    Clear Select
+                  </button>
+                </div>
+              </div>
+
+              {/* Progress UI when processing */}
+              {isProcessingBatch && (
+                <div className="w-full p-4 bg-crust border border-hype/20 rounded-2xl flex flex-col gap-3">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 text-hype animate-spin" />
+                      <span className="text-xs font-bold text-text">
+                        Processing index {batchCurrentIndex + 1} of {batchTotalCount}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if ((window as any).cancelActiveBatch) {
+                          (window as any).cancelActiveBatch();
+                        }
+                      }}
+                      className="px-3 py-1 bg-stressed/20 text-stressed hover:bg-stressed text-[10px] font-bold rounded-lg cursor-pointer"
+                    >
+                      Cancel Batch
+                    </button>
+                  </div>
+                  
+                  {/* Progress bar */}
+                  <div className="w-full bg-surface h-2 rounded-full overflow-hidden">
+                    <div 
+                      className="bg-hype h-full rounded-full transition-all duration-300"
+                      style={{ width: `${((batchCurrentIndex + 1) / batchTotalCount) * 100}%` }}
+                    />
+                  </div>
+
+                  <span className="text-[10px] text-overlay truncate">
+                    Current file: <strong className="text-text">"{batchCurrentTitle}"</strong>
+                  </span>
+                </div>
+              )}
+
+              {/* Logs Checklist */}
+              <div className="flex flex-col gap-2.5 max-h-[350px] overflow-y-auto pr-1">
+                {logs.filter(l => l.processing_status === "completed").map((logItem) => {
+                  const isChecked = selectedLogs.includes(logItem.id);
+                  const logCategoryTag = logItem.custom_tags?.find((t) => t.startsWith("_category:"));
+                  const logCategoryName = logCategoryTag ? logCategoryTag.replace("_category:", "") : "General";
+
+                  return (
+                    <div 
+                      key={logItem.id}
+                      onClick={() => !isProcessingBatch && toggleSelectLog(logItem.id)}
+                      className={`p-3 rounded-2xl border flex items-center justify-between cursor-pointer transition-all duration-200 ${
+                        isChecked 
+                          ? "bg-hype/5 border-hype/30" 
+                          : "bg-surface/50 border-surface hover:border-hype/20"
+                      } ${isProcessingBatch ? "opacity-60 cursor-not-allowed" : ""}`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {isChecked ? (
+                          <CheckSquare className="w-4 h-4 text-hype shrink-0" />
+                        ) : (
+                          <Square className="w-4 h-4 text-overlay shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <h4 className="text-xs font-bold text-text truncate pr-4">{logItem.ai_title}</h4>
+                          <div className="flex gap-1.5 items-center mt-0.5">
+                            <span className="text-[8px] bg-crust text-overlay px-1.5 py-0.5 rounded border border-surface uppercase tracking-wider">
+                              {logCategoryName}
+                            </span>
+                            <span className="text-[8px] text-overlay">
+                              {new Date(logItem.created_at).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <span 
+                        className="w-2.5 h-2.5 rounded-full shrink-0" 
+                        style={{ backgroundColor: logItem.ai_mood_color }} 
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action trigger button */}
+              <button
+                onClick={startBatchReanalysis}
+                disabled={selectedLogs.length === 0 || isProcessingBatch}
+                className="w-full py-3.5 bg-hype disabled:bg-surface disabled:text-overlay disabled:cursor-not-allowed text-crust font-extrabold text-xs rounded-2xl flex items-center justify-center gap-2 hover:bg-hype/90 transition-all cursor-pointer shadow-md"
+              >
+                <Play className="w-4 h-4 fill-crust" />
+                <span>Start Batch Re-analysis ({selectedLogs.length} entries selected)</span>
+              </button>
+            </div>
+
+            {/* Run history list */}
+            <div className="w-full rounded-3xl p-6 glass-panel border border-surface/50 flex flex-col gap-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <h3 className="text-md font-bold text-text flex items-center gap-1.5">
+                    <History className="w-4 h-4 text-hype" />
+                    <span>Process Run Audit History</span>
+                  </h3>
+                  <p className="text-[11px] text-overlay font-light mt-0.5">
+                    Audit trail showing status outcomes of background and manual AI operations.
+                  </p>
+                </div>
+                <button
+                  onClick={clearHistory}
+                  disabled={historyLogs.length === 0}
+                  className="px-3 py-1.5 text-xs border border-surface hover:text-stressed text-text rounded-xl disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Clear History
+                </button>
+              </div>
+
+              {historyLogs.length === 0 ? (
+                <div className="p-8 text-center text-overlay font-light text-xs italic">
+                  No process audits available yet. Run re-analysis or record entries.
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 max-h-[300px] overflow-y-auto pr-1">
+                  {historyLogs.map((hItem) => {
+                    const hDate = new Date(hItem.timestamp).toLocaleString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit"
+                    });
+                    const isSuccess = hItem.status === "success";
+
+                    return (
+                      <div 
+                        key={hItem.id}
+                        className="p-3 bg-crust/50 border border-surface/50 rounded-2xl flex items-center justify-between gap-4"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-[8px] text-overlay font-mono">{hDate}</span>
+                            <span className="text-[9px] bg-surface text-hype font-bold px-1.5 py-0.2 rounded border border-surface uppercase tracking-wider">
+                              {hItem.action}
+                            </span>
+                          </div>
+                          <h4 className="text-xs font-bold text-text truncate mt-1">"{hItem.title}"</h4>
+                          {!isSuccess && hItem.error && (
+                            <p className="text-[9px] text-stressed font-mono mt-0.5 leading-snug">{hItem.error}</p>
+                          )}
+                        </div>
+
+                        <span className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider shrink-0 ${
+                          isSuccess ? "bg-productive/15 text-productive" : "bg-stressed/15 text-stressed"
+                        }`}>
+                          {hItem.status}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Tab Documentation */}
+        {activeTab === "documentation" && (
+          <div className="w-full rounded-3xl p-6 glass-panel border border-surface/50 text-left">
+            <MarkdownRenderer content={DOCS_MARKDOWN} />
+          </div>
+        )}
+
       </main>
 
-      {/* Floating Action Recording Button (Repositioned to bottom-right) */}
+      {/* Floating Action Recording Button */}
       <div className="fixed bottom-6 right-6 z-40">
         <motion.button
           whileHover={{ scale: 1.05 }}

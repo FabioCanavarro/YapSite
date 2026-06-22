@@ -238,14 +238,23 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
     let removeFillerWords = true;
     let enableSwearWords = false;
     let customPrompt = "";
+    let language = "multidetect";
+    let customMoods = [];
+    let categories = { mode: "open", list: [] };
+    let tags = { mode: "open", list: [] };
+
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings");
+      const saved = localStorage.getItem("yapsite_settings_v2");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           removeFillerWords = parsed.removeFillerWords ?? true;
           enableSwearWords = parsed.enableSwearWords ?? false;
           customPrompt = parsed.customPrompt ?? "";
+          language = parsed.language ?? "multidetect";
+          customMoods = parsed.customMoods ?? [];
+          categories = parsed.categories ?? { mode: "open", list: [] };
+          tags = parsed.tags ?? { mode: "open", list: [] };
         } catch (e) {}
       }
     }
@@ -279,11 +288,57 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
         removeFillerWords,
         enableSwearWords,
         customPrompt,
+        language,
+        customMoods,
+        categories,
+        tags,
       }),
     })
       .then(async (res) => {
         if (res.ok) {
           const processedLog = await res.json();
+          
+          // Auto register spouted category & tags
+          if (processedLog && typeof window !== "undefined") {
+            const categoryTag = processedLog.custom_tags?.find((t: string) => t.startsWith("_category:"));
+            const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+            
+            const savedSettings = localStorage.getItem("yapsite_settings_v2");
+            if (savedSettings) {
+              try {
+                const parsedSettings = JSON.parse(savedSettings);
+                let settingsChanged = false;
+                if (categoryName && !parsedSettings.categories?.list?.includes(categoryName)) {
+                  parsedSettings.categories.list.push(categoryName);
+                  settingsChanged = true;
+                }
+                processedLog.ai_tags?.forEach((t: string) => {
+                  if (t && !parsedSettings.tags?.list?.includes(t)) {
+                    parsedSettings.tags.list.push(t);
+                    settingsChanged = true;
+                  }
+                });
+                if (settingsChanged) {
+                  localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsedSettings));
+                }
+              } catch (e) {}
+            }
+
+            // Write run history log
+            try {
+              const histSaved = localStorage.getItem("yapsite_analysis_history");
+              const hist = histSaved ? JSON.parse(histSaved) : [];
+              hist.unshift({
+                id: Math.random().toString(36).substring(7),
+                timestamp: new Date().toISOString(),
+                action: "Recorded Audio Analysis",
+                title: processedLog.ai_title || "Untitled Entry",
+                status: "success",
+              });
+              localStorage.setItem("yapsite_analysis_history", JSON.stringify(hist.slice(0, 100)));
+            } catch (e) {}
+          }
+
           if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
             new Notification("YapSite Journal Processed", {
               body: `"${processedLog.ai_title || "Untitled"}" is ready!`,
@@ -292,10 +347,41 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
           }
           toast.success(`Processed "${processedLog.ai_title}"!`);
           onSuccess();
+        } else {
+          // Write failed run history log
+          try {
+            const histSaved = localStorage.getItem("yapsite_analysis_history");
+            const hist = histSaved ? JSON.parse(histSaved) : [];
+            hist.unshift({
+              id: Math.random().toString(36).substring(7),
+              timestamp: new Date().toISOString(),
+              action: "Recorded Audio Analysis",
+              title: fileNameOrig,
+              status: "failed",
+              error: `Server responded with ${res.status}`,
+            });
+            localStorage.setItem("yapsite_analysis_history", JSON.stringify(hist.slice(0, 100)));
+          } catch (e) {}
         }
       })
       .catch((err) => {
         console.error("Background AI process trigger failed:", err);
+        // Write failed run history log
+        try {
+          if (typeof window !== "undefined") {
+            const histSaved = localStorage.getItem("yapsite_analysis_history");
+            const hist = histSaved ? JSON.parse(histSaved) : [];
+            hist.unshift({
+              id: Math.random().toString(36).substring(7),
+              timestamp: new Date().toISOString(),
+              action: "Recorded Audio Analysis",
+              title: fileNameOrig,
+              status: "failed",
+              error: err.message || String(err),
+            });
+            localStorage.setItem("yapsite_analysis_history", JSON.stringify(hist.slice(0, 100)));
+          }
+        } catch (e) {}
       });
   };
 

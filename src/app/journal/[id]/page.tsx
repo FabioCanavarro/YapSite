@@ -10,6 +10,7 @@ import {
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import EchoCard from "@/components/EchoCard";
+import MarkdownRenderer from "@/components/MarkdownRenderer";
 
 interface Log {
   id: string;
@@ -50,6 +51,37 @@ export default function JournalDetail({ params }: PageProps) {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
 
+  const [editedCategory, setEditedCategory] = useState("General");
+  const [categoriesList, setCategoriesList] = useState<string[]>([]);
+  const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);
+  const [customCategoryName, setCustomCategoryName] = useState("");
+  const [moodsList, setMoodsList] = useState<{ name: string; color: string }[]>([
+    { name: "Stressed", color: "#f38ba8" },
+    { name: "Calm", color: "#74c7ec" },
+    { name: "Focused", color: "#a6e3a1" },
+    { name: "Excited", color: "#cba6f7" },
+    { name: "Sad", color: "#89b4fa" },
+    { name: "Tired", color: "#fab387" }
+  ]);
+
+  // Load categories and moods on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("yapsite_settings_v2");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed.categories?.list) {
+            setCategoriesList(parsed.categories.list);
+          }
+          if (parsed.customMoods) {
+            setMoodsList(parsed.customMoods);
+          }
+        } catch (e) {}
+      }
+    }
+  }, []);
+
   useEffect(() => {
     async function loadJournal() {
       setIsLoading(true);
@@ -80,6 +112,11 @@ export default function JournalDetail({ params }: PageProps) {
         setEditedTitle(data.ai_title || "");
         setEditedTags(data.ai_tags?.join(", ") || "");
         setEditedMoodColor(data.ai_mood_color || "#74c7ec");
+
+        // Extract category
+        const categoryTag = data.custom_tags?.find((t: string) => t.startsWith("_category:"));
+        const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+        setEditedCategory(categoryName);
         
         // Convert ISO date to local string suitable for datetime-local input
         const d = new Date(data.created_at);
@@ -183,8 +220,36 @@ export default function JournalDetail({ params }: PageProps) {
     if (!log) return;
 
     setIsSavingDetails(true);
+    const finalCategory = showCustomCategoryInput ? customCategoryName.trim() : editedCategory;
+    if (showCustomCategoryInput && !finalCategory) {
+      toast.error("Custom category name cannot be empty");
+      setIsSavingDetails(false);
+      return;
+    }
+
+    // Auto add to categories list in settings if custom is created
+    if (showCustomCategoryInput && finalCategory && typeof window !== "undefined") {
+      const saved = localStorage.getItem("yapsite_settings_v2");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (!parsed.categories.list.includes(finalCategory)) {
+            parsed.categories.list.push(finalCategory);
+            localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsed));
+            setCategoriesList(parsed.categories.list);
+          }
+        } catch (e) {}
+      }
+    }
+
     const parsedTags = editedTags.split(",").map(t => t.trim()).filter(Boolean);
     const newCreatedAt = new Date(editedDateTime).toISOString();
+
+    // Prepare custom categories prefix
+    const currentCustomTags = log.custom_tags || [];
+    const filteredCustomTags = currentCustomTags.filter((t: string) => !t.startsWith("_category:"));
+    const newCategoryTag = `_category:${finalCategory || "General"}`;
+    const updatedCustomTags = [...filteredCustomTags, newCategoryTag];
 
     const supabase = createClient();
     try {
@@ -194,6 +259,7 @@ export default function JournalDetail({ params }: PageProps) {
           ai_title: editedTitle,
           ai_tags: parsedTags,
           ai_mood_color: editedMoodColor,
+          custom_tags: updatedCustomTags,
           created_at: newCreatedAt,
         })
         .eq("id", id);
@@ -205,9 +271,13 @@ export default function JournalDetail({ params }: PageProps) {
         ai_title: editedTitle,
         ai_tags: parsedTags,
         ai_mood_color: editedMoodColor,
+        custom_tags: updatedCustomTags,
         created_at: newCreatedAt,
       });
       setIsEditingDetails(false);
+      setShowCustomCategoryInput(false);
+      setCustomCategoryName("");
+      setEditedCategory(finalCategory || "General");
       toast.success("Journal details updated successfully!");
     } catch (err) {
       console.error("Error saving details:", err);
@@ -226,14 +296,23 @@ export default function JournalDetail({ params }: PageProps) {
     let removeFillerWords = true;
     let enableSwearWords = false;
     let customPrompt = "";
+    let language = "multidetect";
+    let customMoods = [];
+    let categories = { mode: "open" as const, list: [] as string[] };
+    let tags = { mode: "open" as const, list: [] as string[] };
+
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("yapsite_settings");
+      const saved = localStorage.getItem("yapsite_settings_v2");
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
           removeFillerWords = parsed.removeFillerWords ?? true;
           enableSwearWords = parsed.enableSwearWords ?? false;
           customPrompt = parsed.customPrompt ?? "";
+          language = parsed.language ?? "multidetect";
+          customMoods = parsed.customMoods ?? [];
+          categories = parsed.categories ?? { mode: "open", list: [] };
+          tags = parsed.tags ?? { mode: "open", list: [] };
         } catch (e) {}
       }
     }
@@ -247,6 +326,10 @@ export default function JournalDetail({ params }: PageProps) {
           removeFillerWords,
           enableSwearWords,
           customPrompt,
+          language,
+          customMoods,
+          categories,
+          tags,
         }),
       });
 
@@ -257,6 +340,9 @@ export default function JournalDetail({ params }: PageProps) {
       const updatedLog = await processRes.json();
       setLog(updatedLog);
       
+      const categoryTag = updatedLog.custom_tags?.find((t: string) => t.startsWith("_category:"));
+      const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+      setEditedCategory(categoryName);
       setEditedTitle(updatedLog.ai_title || "");
       setEditedTags(updatedLog.ai_tags?.join(", ") || "");
       setEditedMoodColor(updatedLog.ai_mood_color || "#74c7ec");
@@ -265,9 +351,66 @@ export default function JournalDetail({ params }: PageProps) {
       const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0, 16);
       setEditedDateTime(localISOTime);
 
+      // Auto register spouted category & tags
+      if (typeof window !== "undefined") {
+        const savedSettings = localStorage.getItem("yapsite_settings_v2");
+        if (savedSettings) {
+          try {
+            const parsedSettings = JSON.parse(savedSettings);
+            let settingsChanged = false;
+            if (categoryName && !parsedSettings.categories?.list?.includes(categoryName)) {
+              parsedSettings.categories.list.push(categoryName);
+              settingsChanged = true;
+            }
+            updatedLog.ai_tags?.forEach((t: string) => {
+              if (t && !parsedSettings.tags?.list?.includes(t)) {
+                parsedSettings.tags.list.push(t);
+                settingsChanged = true;
+              }
+            });
+            if (settingsChanged) {
+              localStorage.setItem("yapsite_settings_v2", JSON.stringify(parsedSettings));
+              setCategoriesList(parsedSettings.categories.list);
+            }
+          } catch (e) {}
+        }
+      }
+
+      // Write run history log
+      try {
+        if (typeof window !== "undefined") {
+          const histSaved = localStorage.getItem("yapsite_analysis_history");
+          const hist = histSaved ? JSON.parse(histSaved) : [];
+          hist.unshift({
+            id: Math.random().toString(36).substring(7),
+            timestamp: new Date().toISOString(),
+            action: "Manual Re-analysis",
+            title: updatedLog.ai_title || log.ai_title || "Untitled Entry",
+            status: "success",
+          });
+          localStorage.setItem("yapsite_analysis_history", JSON.stringify(hist.slice(0, 100)));
+        }
+      } catch (e) {}
+
       toast.success("Re-analysis complete!", { id: "reanalyzing" });
     } catch (err: any) {
       console.error("Re-analysis error:", err);
+      // Write failed run history log
+      try {
+        if (typeof window !== "undefined") {
+          const histSaved = localStorage.getItem("yapsite_analysis_history");
+          const hist = histSaved ? JSON.parse(histSaved) : [];
+          hist.unshift({
+            id: Math.random().toString(36).substring(7),
+            timestamp: new Date().toISOString(),
+            action: "Manual Re-analysis",
+            title: log.ai_title || "Untitled Entry",
+            status: "failed",
+            error: err.message || String(err),
+          });
+          localStorage.setItem("yapsite_analysis_history", JSON.stringify(hist.slice(0, 100)));
+        }
+      } catch (e) {}
       toast.error(`Re-analysis failed: ${err.message || err}`, { id: "reanalyzing" });
     } finally {
       setIsReanalyzing(false);
@@ -283,9 +426,13 @@ export default function JournalDetail({ params }: PageProps) {
       hour: "2-digit",
       minute: "2-digit"
     });
+
+    const categoryTag = log.custom_tags?.find((t: string) => t.startsWith("_category:"));
+    const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
     
     const formattedText = `Audio Log [${dateFormatted}]
 Title: ${log.ai_title || "Untitled"}
+Category: ${categoryName}
 Tags: ${log.ai_tags?.map(t => `#${t}`).join(" ") || ""}
 ----------------------------------------
 ${content}`;
@@ -436,31 +583,62 @@ ${reflections || "*No reflections added yet.*"}
                 </div>
               </div>
 
+              {/* Category selector */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-overlay uppercase">Broad Category</label>
+                  <select
+                    value={showCustomCategoryInput ? "custom" : editedCategory}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "custom") {
+                        setShowCustomCategoryInput(true);
+                      } else {
+                        setShowCustomCategoryInput(false);
+                        setEditedCategory(val);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-crust rounded-xl border border-overlay/10 text-text text-xs focus:outline-none focus:border-hype cursor-pointer"
+                  >
+                    {categoriesList.map((cat) => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                    <option value="custom">+ Create custom category...</option>
+                  </select>
+                </div>
+
+                {showCustomCategoryInput && (
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-overlay uppercase">Custom Category Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. school memories"
+                      value={customCategoryName}
+                      onChange={(e) => setCustomCategoryName(e.target.value)}
+                      className="w-full px-3 py-2 bg-crust rounded-xl border border-overlay/10 text-text text-xs focus:outline-none focus:border-hype"
+                    />
+                  </div>
+                )}
+              </div>
+
               {/* Mood selector */}
               <div className="flex flex-col gap-1.5">
                 <label className="text-[10px] font-bold text-overlay uppercase">Mood Color Tone</label>
                 <div className="flex gap-2 flex-wrap">
-                  {[
-                    { hex: "#f38ba8", name: "Stressed" },
-                    { hex: "#74c7ec", name: "Calm" },
-                    { hex: "#a6e3a1", name: "Focused" },
-                    { hex: "#cba6f7", name: "Excited" },
-                    { hex: "#89b4fa", name: "Sad" },
-                    { hex: "#fab387", name: "Tired" }
-                  ].map((moodItem) => (
+                  {moodsList.map((moodItem) => (
                     <button
-                      key={moodItem.hex}
-                      onClick={() => setEditedMoodColor(moodItem.hex)}
+                      key={moodItem.color}
+                      onClick={() => setEditedMoodColor(moodItem.color)}
                       title={moodItem.name}
                       type="button"
                       className={`w-6 h-6 rounded-full border transition-all duration-200 relative ${
-                        editedMoodColor === moodItem.hex
+                        editedMoodColor === moodItem.color
                           ? "scale-110 border-text"
                           : "border-transparent opacity-75 hover:opacity-100"
                       }`}
-                      style={{ backgroundColor: moodItem.hex }}
+                      style={{ backgroundColor: moodItem.color }}
                     >
-                      {editedMoodColor === moodItem.hex && (
+                      {editedMoodColor === moodItem.color && (
                         <span className="absolute inset-0 m-auto w-2 h-2 bg-crust rounded-full" />
                       )}
                     </button>
@@ -510,7 +688,18 @@ ${reflections || "*No reflections added yet.*"}
                 {log.ai_title || "Untitled Entry"}
               </h2>
 
-              <div className="flex flex-wrap gap-1.5 mb-4">
+              <div className="flex flex-wrap gap-2 items-center mb-4">
+                {/* Category Badge */}
+                {(() => {
+                  const categoryTag = log.custom_tags?.find((t: string) => t.startsWith("_category:"));
+                  const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+                  return (
+                    <span className="text-[10px] font-bold px-3 py-1 rounded-full bg-hype/15 text-hype border border-hype/20">
+                      Category: {categoryName}
+                    </span>
+                  );
+                })()}
+
                 {log.ai_tags?.map((tag, idx) => (
                   <span
                     key={idx}
@@ -566,8 +755,8 @@ ${reflections || "*No reflections added yet.*"}
             </div>
           </div>
 
-          <div className="text-md text-text/90 leading-relaxed font-sans tracking-wide whitespace-pre-wrap">
-            {log.tidied_log || "No transcription content available."}
+          <div className="text-md text-text/90 leading-relaxed font-sans tracking-wide">
+            <MarkdownRenderer content={log.tidied_log || "No transcription content available."} />
           </div>
         </motion.div>
 
@@ -645,8 +834,12 @@ ${reflections || "*No reflections added yet.*"}
             </>
           ) : (
             <>
-              <div className="text-sm text-text/90 leading-relaxed font-sans whitespace-pre-wrap">
-                {log.reflections || <span className="italic text-overlay">No retroactive reflections added yet. What did you learn? How do you feel looking back?</span>}
+              <div className="text-sm text-text/90 leading-relaxed font-sans">
+                {log.reflections ? (
+                  <MarkdownRenderer content={log.reflections} />
+                ) : (
+                  <span className="italic text-overlay">No retroactive reflections added yet. What did you learn? How do you feel looking back?</span>
+                )}
               </div>
               <div className="flex justify-end mt-2">
                 <button
