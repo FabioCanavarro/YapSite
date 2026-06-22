@@ -571,6 +571,20 @@ export default function Dashboard() {
     }
   };
 
+  // Fetch logs automatically once the user session is confirmed/changed
+  useEffect(() => {
+    if (user) {
+      fetchLogs();
+    }
+  }, [user]);
+
+  // Automatically process pending logs silently in the background when logs update
+  useEffect(() => {
+    if (logs.length > 0 && !isProcessingPending) {
+      processPendingLogs();
+    }
+  }, [logs, isProcessingPending]);
+
   // Silent background processing of pending entries on load
   const processPendingLogs = async () => {
     const pending = logs.filter((log) => log.processing_status === "pending");
