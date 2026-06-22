@@ -2,11 +2,19 @@
 
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Square, X, AlertTriangle, Radio, Upload } from "lucide-react";
+import { Mic, Square, X, AlertTriangle, Radio, Upload, Minimize2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { saveOfflineJournal } from "@/utils/indexedDb";
 import { compressAudioFile } from "@/utils/audioCompressor";
+
+interface QueueItem {
+  name: string;
+  size: number;
+  status: 'compressing' | 'uploading' | 'saving' | 'completed' | 'failed';
+  progress: number;
+  lastModified: number;
+}
 
 interface BreathingRecorderProps {
   isOpen: boolean;
@@ -19,6 +27,9 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [currentQueueIndex, setCurrentQueueIndex] = useState(-1);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -58,9 +69,30 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
 
       mediaRecorder.onstop = async () => {
         const audioBlob = new Blob(chunksRef.current, { type: options.mimeType });
-        // Since we record at 32kbps, the file is already highly compressed.
-        // We upload it directly to bypass Vercel limits and prevent WAV inflation.
-        await handleSave(audioBlob, options.mimeType || "audio/webm");
+        setIsUploading(true);
+        setIsMinimized(false);
+        setQueue([{
+          name: "Live Audio Recording",
+          size: audioBlob.size,
+          status: 'uploading',
+          progress: 0,
+          lastModified: Date.now()
+        }]);
+        setCurrentQueueIndex(0);
+        
+        try {
+          await handleSaveQueueItem(audioBlob, options.mimeType || "audio/webm", "Live Audio Recording", audioBlob.size, Date.now());
+          setQueue(prev => prev.map((item, idx) => idx === 0 ? { ...item, status: 'completed' } : item));
+          toast.success("Recording saved successfully! AI analysis running in background.");
+          onSuccess();
+          onClose();
+        } catch (err: any) {
+          console.error("Live recording save failed:", err);
+          setQueue(prev => prev.map((item, idx) => idx === 0 ? { ...item, status: 'failed' } : item));
+          toast.error(`Failed to save recording: ${err.message || err}`);
+        } finally {
+          setIsUploading(false);
+        }
       };
 
       // Set up Web Audio API to detect microphone volume
@@ -135,147 +167,190 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
     };
   }, []);
 
-  // Save/Upload audio process
-  const handleSave = async (blob: Blob, mimeType: string) => {
-    setIsUploading(true);
+  const updateQueueItemStatus = (index: number, status: QueueItem['status']) => {
+    setQueue((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, status } : item))
+    );
+  };
+
+  const handleSaveQueueItem = async (
+    blob: Blob,
+    mimeType: string,
+    fileNameOrig: string,
+    size: number,
+    lastModified: number
+  ) => {
     const isOnline = navigator.onLine;
 
     if (!isOnline) {
-      // Offline mode
       try {
         await saveOfflineJournal(blob, mimeType);
-        toast.success("Journal saved offline! It will sync automatically when network returns.");
-        onSuccess();
-        onClose();
+        toast.success(`Journal "${fileNameOrig}" saved offline! It will sync automatically when network returns.`);
+        return;
       } catch (err) {
         console.error("IndexedDB error:", err);
-        toast.error("Failed to save recording offline.");
-      } finally {
-        setIsUploading(false);
+        throw new Error("Failed to save recording offline.");
       }
+    }
+
+    const supabase = createClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      toast.warning("Sign in required. Saving recording offline.");
+      await saveOfflineJournal(blob, mimeType);
       return;
     }
 
-    // Online mode: upload directly to Supabase
-    try {
-      const supabase = createClient();
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
+    let extension = "wav";
+    if (mimeType.includes("webm")) {
+      extension = "webm";
+    } else if (mimeType.includes("ogg")) {
+      extension = "ogg";
+    } else if (mimeType.includes("mp4") || mimeType.includes("m4a") || mimeType.includes("aac")) {
+      extension = "m4a";
+    } else {
+      const parsedExt = mimeType.split("/")[1];
+      extension = parsedExt ? parsedExt.split(";")[0] : "wav";
+    }
 
-      if (authError || !user) {
-        // Fallback: Save offline if not logged in
-        toast.warning("Sign in required. Saving recording offline.");
-        await saveOfflineJournal(blob, mimeType);
-        onSuccess();
-        onClose();
-        return;
-      }
+    const fileTimestamp = lastModified || Date.now();
+    const fileName = `${user.id}/${fileTimestamp}-${Math.random().toString(36).substring(7)}.${extension}`;
 
-      toast.info("Uploading audio journal...", { id: "uploading" });
-
-      let extension = "wav";
-      if (mimeType.includes("webm")) {
-        extension = "webm";
-      } else if (mimeType.includes("ogg")) {
-        extension = "ogg";
-      } else if (mimeType.includes("mp4") || mimeType.includes("m4a") || mimeType.includes("aac")) {
-        extension = "m4a";
-      } else {
-        const parsedExt = mimeType.split("/")[1];
-        extension = parsedExt ? parsedExt.split(";")[0] : "wav";
-      }
-      const fileName = `${user.id}/${Date.now()}-entry.${extension}`;
-
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("audio_journals")
-        .upload(fileName, blob, {
-          contentType: mimeType,
-          duplex: "half",
-        });
-
-      if (uploadError) {
-        throw new Error(`Upload failed: ${uploadError.message}`);
-      }
-
-      toast.loading("Processing tone & mood color with AI...", { id: "uploading" });
-
-      const { data: urlData } = supabase.storage
-        .from("audio_journals")
-        .getPublicUrl(fileName);
-
-      // Create record
-      const { data: dbData, error: dbError } = await supabase
-        .from("journal_logs")
-        .insert({
-          user_id: user.id,
-          audio_url: urlData.publicUrl,
-          processing_status: "pending",
-          ai_title: "Processing voice entry...",
-          ai_mood_color: "#313244",
-          raw_transcript: "Ingesting voice stream...",
-          tidied_log: "Awaiting AI analysis...",
-          ai_tags: ["Analyzing"],
-          custom_tags: [],
-        })
-        .select()
-        .single();
-
-      if (dbError) {
-        throw new Error(`Database error: ${dbError.message}`);
-      }
-
-      // Process API call (Next.js server route calls AI)
-      const processRes = await fetch("/api/process-audio", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logId: dbData.id, removeFillerWords: true }),
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from("audio_journals")
+      .upload(fileName, blob, {
+        contentType: mimeType,
+        duplex: "half",
       });
 
-      if (!processRes.ok) {
-        throw new Error("Failed to process journal log");
-      }
-
-      const processedLog = await processRes.json();
-      toast.success("Successfully processed voice journal!", { id: "uploading" });
-      
-      onSuccess();
-      onClose();
-
-    } catch (err: any) {
-      console.error("Processing audio error:", err);
-      toast.error(`Error saving voice journal: ${err.message || err}`, { id: "uploading" });
-    } finally {
-      setIsUploading(false);
+    if (uploadError) {
+      throw new Error(`Upload failed: ${uploadError.message}`);
     }
+
+    const { data: urlData } = supabase.storage
+      .from("audio_journals")
+      .getPublicUrl(fileName);
+
+    const sizeTag = `_filesize:${size}`;
+    const customTags = [sizeTag];
+
+    let removeFillerWords = true;
+    let enableSwearWords = false;
+    let customPrompt = "";
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("yapsite_settings");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          removeFillerWords = parsed.removeFillerWords ?? true;
+          enableSwearWords = parsed.enableSwearWords ?? false;
+          customPrompt = parsed.customPrompt ?? "";
+        } catch (e) {}
+      }
+    }
+
+    const { data: dbData, error: dbError } = await supabase
+      .from("journal_logs")
+      .insert({
+        user_id: user.id,
+        audio_url: urlData.publicUrl,
+        processing_status: "pending",
+        ai_title: `Analyzing "${fileNameOrig.substring(0, 30)}"...`,
+        ai_mood_color: "#313244",
+        raw_transcript: "Ingesting voice stream...",
+        tidied_log: "Awaiting AI analysis...",
+        ai_tags: ["Analyzing"],
+        custom_tags: customTags,
+        created_at: new Date(fileTimestamp).toISOString(),
+      })
+      .select()
+      .single();
+
+    if (dbError) {
+      throw new Error(`Database error: ${dbError.message}`);
+    }
+
+    fetch("/api/process-audio", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        logId: dbData.id,
+        removeFillerWords,
+        enableSwearWords,
+        customPrompt,
+      }),
+    })
+      .then(async (res) => {
+        if (res.ok) {
+          const processedLog = await res.json();
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification("YapSite Journal Processed", {
+              body: `"${processedLog.ai_title || "Untitled"}" is ready!`,
+              icon: "/favicon.ico"
+            });
+          }
+          toast.success(`Processed "${processedLog.ai_title}"!`);
+          onSuccess();
+        }
+      })
+      .catch((err) => {
+        console.error("Background AI process trigger failed:", err);
+      });
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    // Set limit to 2GB (2048 MB)
-    const MAX_SIZE = 2 * 1024 * 1024 * 1024; 
-    if (file.size > MAX_SIZE) {
-      toast.error("Audio file is too large. Maximum size is 2GB.");
+    const fileList = Array.from(files);
+
+    const MAX_SIZE = 2 * 1024 * 1024 * 1024;
+    const oversized = fileList.some(file => file.size > MAX_SIZE);
+    if (oversized) {
+      toast.error("One or more audio files are too large. Maximum size is 2GB.");
       return;
     }
 
-    if (file.size > 25 * 1024 * 1024) {
-      toast.warning("File size is larger than 25MB. Note that processing very large files may require upgrading your Supabase storage limits and can hit Vercel's serverless function timeout limits.", {
-        duration: 8000
-      });
+    const initialQueue: QueueItem[] = fileList.map(file => ({
+      name: file.name,
+      size: file.size,
+      status: 'compressing',
+      progress: 0,
+      lastModified: file.lastModified
+    }));
+
+    setQueue(initialQueue);
+    setIsUploading(true);
+    setIsMinimized(false);
+
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
     }
 
-    toast.loading("Compressing and downsampling audio...", { id: "uploading" });
-    const compressedBlob = await compressAudioFile(file);
-    
-    if (compressedBlob.size > 50 * 1024 * 1024) {
-      toast.dismiss("uploading");
-      toast.error("Even after compression, the audio file exceeds Supabase's 50MB limit.");
-      return;
+    for (let i = 0; i < fileList.length; i++) {
+      setCurrentQueueIndex(i);
+      const file = fileList[i];
+
+      try {
+        updateQueueItemStatus(i, 'compressing');
+        const compressedBlob = await compressAudioFile(file);
+
+        updateQueueItemStatus(i, 'uploading');
+        await handleSaveQueueItem(compressedBlob, file.type || "audio/wav", file.name, file.size, file.lastModified);
+
+        updateQueueItemStatus(i, 'completed');
+      } catch (err: any) {
+        console.error("Queue item upload failed:", err);
+        updateQueueItemStatus(i, 'failed');
+        toast.error(`Failed to upload ${file.name}: ${err.message || err}`);
+      }
     }
-    
-    toast.success(`Audio compressed successfully! (${(compressedBlob.size / 1024 / 1024).toFixed(1)}MB)`);
-    await handleSave(compressedBlob, "audio/wav");
+
+    setIsUploading(false);
+    toast.success("All selected audio files have been synced! Processing continues in background.");
+    onSuccess();
+    onClose();
   };
 
   const formatTime = (sec: number) => {
@@ -283,6 +358,35 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
     const secs = sec % 60;
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
+
+  if (isOpen && isMinimized) {
+    const activeItem = queue[currentQueueIndex];
+    const completedCount = queue.filter(item => item.status === 'completed').length;
+    const totalCount = queue.length;
+
+    return (
+      <div className="fixed bottom-6 right-6 z-50 glass-panel p-4 rounded-3xl flex items-center gap-4 shadow-xl border border-hype/20 max-w-sm w-72 animate-in fade-in slide-in-from-bottom-4 duration-300">
+        <div className="relative flex items-center justify-center shrink-0">
+          <Loader2 className="w-6 h-6 text-hype animate-spin" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-bold text-text truncate">Syncing Journal Entries</p>
+          <p className="text-[10px] text-overlay truncate">
+            {activeItem ? `${activeItem.status === 'compressing' ? 'Compressing' : 'Uploading'} "${activeItem.name}"` : 'Processing...'}
+          </p>
+          <p className="text-[9px] text-hype/80 font-mono mt-0.5">
+            {completedCount} / {totalCount} completed
+          </p>
+        </div>
+        <button
+          onClick={() => setIsMinimized(false)}
+          className="text-xs font-semibold text-hype hover:text-hype-hover shrink-0 px-2.5 py-1.5 rounded-full bg-crust border border-surface cursor-pointer"
+        >
+          Expand
+        </button>
+      </div>
+    );
+  }
 
   return (
     <AnimatePresence>
@@ -301,13 +405,32 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
                 {isRecording ? "Live Recording" : "Ready to Record"}
               </span>
             </div>
-            <button
-              onClick={onClose}
-              disabled={isUploading}
-              className="p-2 rounded-full bg-surface text-text hover:text-stressed transition-colors duration-200"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              {isUploading && (
+                <button
+                  onClick={() => setIsMinimized(true)}
+                  title="Minimize to background"
+                  className="p-2 rounded-full bg-surface text-text hover:text-hype transition-colors duration-200 cursor-pointer"
+                >
+                  <Minimize2 className="w-5 h-5" />
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  if (isUploading) {
+                    const confirmClose = window.confirm("Active uploads are running. Closing will keep uploads running in the background. Minimize instead?");
+                    if (confirmClose) {
+                      setIsMinimized(true);
+                      return;
+                    }
+                  }
+                  onClose();
+                }}
+                className="p-2 rounded-full bg-surface text-text hover:text-stressed transition-colors duration-200 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Center Breathing / Volume Responsive Animation */}
@@ -349,7 +472,7 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
             <p className="mt-8 text-overlay text-sm font-light text-center max-w-xs z-10">
               {isRecording
                 ? "Recording voice... AI will listen to your pauses, pace, and breathing to detect your mood color."
-                : "Record live or choose a pre-recorded file from your device below."}
+                : "Record live or choose pre-recorded files from your device below."}
             </p>
           </div>
 
@@ -373,13 +496,14 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
                   >
                     <Mic className="w-5 h-5 fill-crust" /> Start Recording
                   </motion.button>
-                  
+
                   <label className="px-6 py-4 rounded-3xl bg-surface hover:bg-surface-hover border border-overlay/10 text-text font-semibold text-md flex items-center gap-3 cursor-pointer transition-colors shadow-md w-full sm:w-auto justify-center">
                     <Upload className="w-5 h-5 text-overlay" />
                     <span>Upload Audio</span>
                     <input
                       type="file"
                       accept="audio/*"
+                      multiple
                       onChange={handleFileChange}
                       disabled={isUploading}
                       className="hidden"
@@ -400,11 +524,35 @@ export default function BreathingRecorder({ isOpen, onClose, onSuccess }: Breath
             </div>
           </div>
 
-          {/* Uploading overlay */}
+          {/* In-Dialog Uploading/Compressing Queue progress */}
           {isUploading && (
-            <div className="absolute inset-0 bg-crust/90 z-50 flex flex-col items-center justify-center gap-4">
-              <div className="w-12 h-12 border-4 border-hype border-t-transparent rounded-full animate-spin" />
-              <p className="text-hype text-md font-medium tracking-wide">Syncing with cloud...</p>
+            <div className="absolute inset-0 bg-crust/90 z-50 flex flex-col items-center justify-center p-6 gap-6">
+              <Loader2 className="w-12 h-12 text-hype animate-spin mb-2" />
+              <p className="text-hype text-md font-bold tracking-wide">Syncing entries with cloud...</p>
+              
+              <div className="w-full max-w-md bg-surface rounded-2xl p-4 border border-overlay/10 max-h-60 overflow-y-auto flex flex-col gap-2">
+                {queue.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center text-xs p-2.5 rounded-xl bg-crust/50 border border-surface">
+                    <span className="truncate flex-1 font-medium text-text pr-2">{item.name}</span>
+                    <span className={`shrink-0 font-semibold px-2 py-0.5 rounded-lg text-[9px] uppercase font-mono ${
+                      item.status === 'completed' ? 'bg-productive/20 text-productive' :
+                      item.status === 'failed' ? 'bg-stressed/20 text-stressed' :
+                      item.status === 'uploading' ? 'bg-hype/20 text-hype animate-pulse' :
+                      item.status === 'compressing' ? 'bg-calm/20 text-calm animate-pulse' :
+                      'bg-surface text-overlay'
+                    }`}>
+                      {item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              
+              <button
+                onClick={() => setIsMinimized(true)}
+                className="px-6 py-2.5 rounded-full bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-semibold text-hype transition-all cursor-pointer"
+              >
+                Minimize & Do in Background
+              </button>
             </div>
           )}
         </motion.div>

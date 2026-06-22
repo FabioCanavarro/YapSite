@@ -14,7 +14,11 @@ export interface AIEngine {
   processAudioFilePath(
     filePath: string,
     mimeType: string,
-    options?: { removeFillerWords?: boolean }
+    options?: {
+      removeFillerWords?: boolean;
+      enableSwearWords?: boolean;
+      customPrompt?: string;
+    }
   ): Promise<JournalAnalysisResult>;
 }
 
@@ -36,7 +40,11 @@ export class GroqHackClubEngine implements AIEngine {
   async processAudioFilePath(
     filePath: string,
     mimeType: string,
-    options?: { removeFillerWords?: boolean }
+    options?: {
+      removeFillerWords?: boolean;
+      enableSwearWords?: boolean;
+      customPrompt?: string;
+    }
   ): Promise<JournalAnalysisResult> {
     const groqApiKey = process.env.GROQ_API_KEY;
     const hasGroq = groqApiKey && groqApiKey !== "your-groq-api-key-here";
@@ -47,6 +55,8 @@ export class GroqHackClubEngine implements AIEngine {
     }
 
     const removeFiller = options?.removeFillerWords ?? true;
+    const enableSwear = options?.enableSwearWords ?? false;
+    const customPrompt = options?.customPrompt || "";
 
     // 1. Transcribe the audio file using Groq Whisper API
     let rawTranscript = "";
@@ -71,20 +81,31 @@ export class GroqHackClubEngine implements AIEngine {
     const systemPrompt = `
       You are an empathetic, silent listening journal assistant.
       You are provided with a raw transcript of the user's audio journal entry.
-      Analyze the text to assess emotional tone, clean up punctuation/grammar/syntax, and extract details.
+      Analyze the text to assess emotional tone, clean up grammar/syntax, format it, and extract details.
+
+      FORMATTING DIRECTIONS:
+      ${customPrompt ? `Apply the following custom user prompt instructions to shape the tone, formatting, and layout of the tidied journal:
+      "${customPrompt}"` : `Format the "tidied_log" strictly like a beautiful journal entry.
+      - Group thoughts into logical paragraphs with double line breaks for spacing.
+      - Retain any dates, times, and specific details mentioned.
+      - Fix grammar, spelling, punctuation, and structural flow.
+      - DO NOT SUMMARIZE or shorten the thoughts; keep the full length and depth of the user's message.`}
+
+      CRITICAL TRANSCRIPTION RULES:
+      - Filler words (e.g., 'um', 'uh', 'like', 'you know'): ${removeFiller ? "Filter out and remove them entirely." : "Retain filler words but clean up spelling/punctuation."}
+      - Swear/Curse words: ${enableSwear ? "Strictly RETAIN all swear and curse words, as they express the user's raw emotion." : "Filter or clean up severe swear/curse words if present."}
 
       You MUST respond ONLY with a JSON object matching this structure:
       {
         "ai_title": "A short, beautiful title (3-6 words) summarizing the entry.",
         "ai_mood_color": "Assign one of the following exact hex codes representing their emotional tone based on semantics:
                           - Stressed / Angry / Ranting -> '#f38ba8'
-                          - Calm / Sad / Deep Reflection -> '#74c7ec'
+                          - Calm / Deep Reflection -> '#74c7ec'
                           - Productive / Focused -> '#a6e3a1'
-                          - Hype / Happy / Excited -> '#cba6f7'",
-        "tidied_log": "Strictly copy the user's thoughts. Fix grammar, spelling, punctuation, and formatting, but DO NOT SUMMARIZE OR SHORTEN. Keep full fidelity and length of the thoughts.
-                       - If removeFillerWords is true, filter out filler words (e.g., 'um', 'uh', 'like', 'you know').
-                       - If removeFillerWords is false, retain the filler words but clean up spelling/punctuation.
-                       Current setting: removeFillerWords is ${removeFiller ? "TRUE" : "FALSE"}.",
+                          - Hype / Happy / Excited -> '#cba6f7'
+                          - Sad / Lonely / Melancholic -> '#89b4fa'
+                          - Tired / Exhausted / Burned out -> '#fab387'",
+        "tidied_log": "The tidied, formatted journal text based on the directions above.",
         "ai_tags": ["2 to 5 relevant conceptual tags."]
       }
 

@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
-  Trash2, ShieldCheck, ChevronRight, Calendar, Info 
+  Trash2, ShieldCheck, ChevronRight, Calendar, Info,
+  Settings, ArrowUp, ArrowDown, SlidersHorizontal, X
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -38,6 +39,17 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessingPending, setIsProcessingPending] = useState(false);
 
+  // Settings states
+  const [removeFillerWords, setRemoveFillerWords] = useState(true);
+  const [enableSwearWords, setEnableSwearWords] = useState(false);
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Sorting and rearranging states
+  const [sortBy, setSortBy] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc' | 'size-desc' | 'size-asc' | 'custom'>('date-desc');
+  const [isRearranging, setIsRearranging] = useState(false);
+  const [customOrder, setCustomOrder] = useState<string[]>([]);
+
   // Initialize offline sync hook
   const { isOnline } = useOfflineSync(() => fetchLogs());
 
@@ -53,6 +65,32 @@ export default function Dashboard() {
       setIsLoading(false);
     }
     checkAuth();
+  }, []);
+
+  // Load settings and custom order from localStorage on mount
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("yapsite_settings");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setRemoveFillerWords(parsed.removeFillerWords ?? true);
+          setEnableSwearWords(parsed.enableSwearWords ?? false);
+          setCustomPrompt(parsed.customPrompt ?? "");
+        } catch (e) {
+          console.error("Failed to parse settings", e);
+        }
+      }
+
+      const savedOrder = localStorage.getItem("yapsite_custom_order");
+      if (savedOrder) {
+        try {
+          setCustomOrder(JSON.parse(savedOrder));
+        } catch (e) {
+          console.error("Failed to parse custom order", e);
+        }
+      }
+    }
   }, []);
 
   // Fetch journal entries once user state is confirmed
@@ -99,11 +137,24 @@ export default function Dashboard() {
         const res = await fetch("/api/process-audio", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ logId: log.id, removeFillerWords: true }),
+          body: JSON.stringify({ 
+            logId: log.id, 
+            removeFillerWords,
+            enableSwearWords,
+            customPrompt
+          }),
         });
 
         if (res.ok) {
-          toast.success("Silent background audio processing complete!");
+          const processed = await res.json();
+          // Trigger browser notification
+          if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+            new Notification("YapSite Journal Processed", {
+              body: `"${processed.ai_title || "Untitled"}" is ready!`,
+              icon: "/favicon.ico"
+            });
+          }
+          toast.success(`Background audio processing complete: "${processed.ai_title}"`);
           fetchLogs();
         }
       } catch (err) {
@@ -169,9 +220,26 @@ export default function Dashboard() {
     }
   };
 
-  // Search & Filter computation
+  const moveLog = (logId: string, direction: 'up' | 'down') => {
+    const currentList = [...filteredLogs];
+    const index = currentList.findIndex(l => l.id === logId);
+    if (index === -1) return;
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= currentList.length) return;
+
+    const item = currentList[index];
+    currentList.splice(index, 1);
+    currentList.splice(targetIndex, 0, item);
+
+    const newOrder = currentList.map(l => l.id);
+    setCustomOrder(newOrder);
+    localStorage.setItem("yapsite_custom_order", JSON.stringify(newOrder));
+  };
+
+  // Search, Filter & Sort computation
   const filteredLogs = useMemo(() => {
-    return logs.filter((log) => {
+    const filtered = logs.filter((log) => {
       const matchesSearch = 
         log.ai_title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         log.tidied_log?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -182,7 +250,46 @@ export default function Dashboard() {
 
       return matchesSearch && matchesMood;
     });
-  }, [logs, searchQuery, selectedMood]);
+
+    const getLogSize = (log: Log) => {
+      const tag = log.custom_tags?.find(t => t.startsWith('_filesize:'));
+      if (tag) {
+        const bytes = parseInt(tag.split(':')[1], 10);
+        if (!isNaN(bytes)) return bytes;
+      }
+      return 0;
+    };
+
+    return [...filtered].sort((a, b) => {
+      if (sortBy === 'date-desc') {
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      if (sortBy === 'date-asc') {
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      if (sortBy === 'title-asc') {
+        return (a.ai_title || '').localeCompare(b.ai_title || '');
+      }
+      if (sortBy === 'title-desc') {
+        return (b.ai_title || '').localeCompare(a.ai_title || '');
+      }
+      if (sortBy === 'size-desc') {
+        return getLogSize(b) - getLogSize(a);
+      }
+      if (sortBy === 'size-asc') {
+        return getLogSize(a) - getLogSize(b);
+      }
+      if (sortBy === 'custom') {
+        const aIdx = customOrder.indexOf(a.id);
+        const bIdx = customOrder.indexOf(b.id);
+        if (aIdx !== -1 && bIdx !== -1) return aIdx - bIdx;
+        if (aIdx !== -1) return -1;
+        if (bIdx !== -1) return 1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+      return 0;
+    });
+  }, [logs, searchQuery, selectedMood, sortBy, customOrder]);
 
   if (isLoading) {
     return (
@@ -273,6 +380,14 @@ export default function Dashboard() {
                 {isOnline ? "Online" : "Offline Mode"}
               </span>
             </div>
+            {/* Settings Button */}
+            <button
+              onClick={() => setIsSettingsOpen(true)}
+              title="Settings"
+              className="p-2 rounded-xl bg-surface hover:text-hype text-text transition-colors duration-200 border border-overlay/5 cursor-pointer"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
             <button
               onClick={handleLogout}
               title="Sign Out"
@@ -283,6 +398,121 @@ export default function Dashboard() {
           </div>
         </div>
       </header>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/80 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className="w-full max-w-lg glass-panel p-6 rounded-3xl border border-hype/20 flex flex-col gap-5 shadow-xl"
+            >
+              <div className="flex justify-between items-center border-b border-surface pb-3">
+                <h3 className="text-lg font-bold text-text flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-hype animate-[spin_10s_linear_infinite]" />
+                  <span>AI Journal Settings</span>
+                </h3>
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="p-1 rounded-lg hover:bg-surface text-overlay hover:text-text cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Toggles */}
+              <div className="flex flex-col gap-4">
+                <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
+                  <div className="flex flex-col gap-0.5 pr-2">
+                    <span className="text-xs font-bold text-text">Remove Filler Words</span>
+                    <span className="text-[10px] text-overlay">Strips 'um', 'uh', 'like', 'you know' from transcript</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={removeFillerWords}
+                    onChange={(e) => {
+                      setRemoveFillerWords(e.target.checked);
+                      localStorage.setItem("yapsite_settings", JSON.stringify({
+                        removeFillerWords: e.target.checked,
+                        enableSwearWords,
+                        customPrompt
+                      }));
+                    }}
+                    className="w-5 h-5 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
+                  />
+                </label>
+
+                <label className="flex items-center justify-between p-3 rounded-2xl bg-crust border border-surface cursor-pointer select-none">
+                  <div className="flex flex-col gap-0.5 pr-2">
+                    <span className="text-xs font-bold text-text">Enable Swear Words</span>
+                    <span className="text-[10px] text-overlay">Retain curse words in transcript and tidied thoughts</span>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={enableSwearWords}
+                    onChange={(e) => {
+                      setEnableSwearWords(e.target.checked);
+                      localStorage.setItem("yapsite_settings", JSON.stringify({
+                        removeFillerWords,
+                        enableSwearWords: e.target.checked,
+                        customPrompt
+                      }));
+                    }}
+                    className="w-5 h-5 rounded border-overlay/30 bg-surface accent-hype cursor-pointer"
+                  />
+                </label>
+
+                {/* Custom System Prompt Instructions */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-text">Custom AI Prompt Instructions</label>
+                    <button
+                      onClick={() => {
+                        const defaultPrompt = "";
+                        setCustomPrompt(defaultPrompt);
+                        localStorage.setItem("yapsite_settings", JSON.stringify({
+                          removeFillerWords,
+                          enableSwearWords,
+                          customPrompt: defaultPrompt
+                        }));
+                        toast.info("Prompt reset to default instructions");
+                      }}
+                      className="text-[10px] text-hype font-semibold hover:underline cursor-pointer"
+                    >
+                      Reset to Default
+                    </button>
+                  </div>
+                  <textarea
+                    placeholder="Enter custom formatting style. E.g. 'Format this like a deep psychological reflection. Use bullet points for key realizations. End with a list of actionable steps for tomorrow.'"
+                    value={customPrompt}
+                    onChange={(e) => {
+                      setCustomPrompt(e.target.value);
+                      localStorage.setItem("yapsite_settings", JSON.stringify({
+                        removeFillerWords,
+                        enableSwearWords,
+                        customPrompt: e.target.value
+                      }));
+                    }}
+                    rows={4}
+                    className="w-full p-3 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-xs leading-relaxed resize-none font-sans"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="px-6 py-2.5 rounded-full bg-hype text-crust font-bold text-xs hover:bg-hype/90 transition-transform active:scale-95 cursor-pointer shadow-md"
+                >
+                  Close & Apply
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Main Content (Responsive Laptop / Mobile Canvas) */}
       <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6">
@@ -300,6 +530,43 @@ export default function Dashboard() {
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-11 pr-4 py-3 bg-surface rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm transition-colors duration-200"
             />
+          </div>
+
+          {/* Sorting and Rearrange Row */}
+          <div className="flex flex-wrap gap-2.5 items-center justify-between">
+            <div className="flex items-center gap-1.5 bg-surface border border-overlay/10 rounded-2xl px-3.5 py-2 shrink-0">
+              <SlidersHorizontal className="w-3.5 h-3.5 text-overlay" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="bg-transparent text-text text-xs focus:outline-none cursor-pointer pr-1"
+              >
+                <option value="date-desc">Newest Date</option>
+                <option value="date-asc">Oldest Date</option>
+                <option value="title-asc">Title (A-Z)</option>
+                <option value="title-desc">Title (Z-A)</option>
+                <option value="size-desc">File Size (Large)</option>
+                <option value="size-asc">File Size (Small)</option>
+                <option value="custom">Custom Order</option>
+              </select>
+            </div>
+
+            <button
+              onClick={() => {
+                setIsRearranging(!isRearranging);
+                if (!isRearranging) {
+                  setSortBy('custom');
+                  toast.info("Rearrange active: Use arrows on logs to order them manually");
+                }
+              }}
+              className={`text-xs px-3.5 py-2 rounded-2xl border transition-all duration-200 flex items-center gap-1.5 cursor-pointer font-semibold ${
+                isRearranging
+                  ? "bg-hype text-crust border-hype"
+                  : "bg-surface text-text border-overlay/10 hover:border-hype/30"
+              }`}
+            >
+              <span>Rearrange Logs</span>
+            </button>
           </div>
 
           {/* Tag / Mood Filter pills */}
@@ -354,6 +621,26 @@ export default function Dashboard() {
             >
               <span className="w-2 h-2 rounded-full bg-hype" /> Excited
             </button>
+            <button
+              onClick={() => setSelectedMood("#89b4fa")}
+              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                selectedMood === "#89b4fa"
+                  ? "bg-sky-500 text-crust border-sky-500 font-semibold"
+                  : "bg-surface text-text border-overlay/10"
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-[rgba(137,180,250,1)]" /> Sad
+            </button>
+            <button
+              onClick={() => setSelectedMood("#fab387")}
+              className={`text-xs px-3.5 py-2 rounded-full border shrink-0 flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                selectedMood === "#fab387"
+                  ? "bg-orange-400 text-crust border-orange-400 font-semibold"
+                  : "bg-surface text-text border-overlay/10"
+              }`}
+            >
+              <span className="w-2 h-2 rounded-full bg-[rgba(250,179,135,1)]" /> Tired
+            </button>
           </div>
         </div>
 
@@ -389,9 +676,23 @@ export default function Dashboard() {
                   minute: "2-digit"
                 });
 
+                const sizeTag = log.custom_tags?.find((t) => t.startsWith("_filesize:"));
+                let formattedSize = "";
+                if (sizeTag) {
+                  const bytes = parseInt(sizeTag.split(":")[1], 10);
+                  if (!isNaN(bytes)) {
+                    if (bytes > 1024 * 1024) {
+                      formattedSize = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+                    } else {
+                      formattedSize = `${(bytes / 1024).toFixed(0)} KB`;
+                    }
+                  }
+                }
+
                 return (
                   <motion.div
                     key={log.id}
+                    layout
                     initial={{ opacity: 0, y: 15 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, scale: 0.95 }}
@@ -409,26 +710,57 @@ export default function Dashboard() {
                     />
 
                     <div className="flex justify-between items-start gap-4">
-                      <div>
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-[10px] text-overlay font-light uppercase tracking-wider flex items-center gap-1">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="text-[10px] text-overlay font-light uppercase tracking-wider flex items-center gap-1 shrink-0">
                             <Calendar className="w-3 h-3" />
                             {dateStr}
                           </span>
+                          {formattedSize && (
+                            <span className="text-[9px] text-overlay font-mono bg-crust/50 px-1.5 py-0.5 rounded border border-surface shrink-0">
+                              {formattedSize}
+                            </span>
+                          )}
                           {log.processing_status === "pending" && (
-                            <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse">
+                            <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse shrink-0">
                               Processing...
                             </span>
                           )}
                         </div>
-                        <h3 className="text-md font-bold text-text group-hover:text-hype transition-colors duration-200 leading-snug">
+                        <h3 className="text-md font-bold text-text group-hover:text-hype transition-colors duration-200 leading-snug truncate pr-6">
                           {log.ai_title || "Untitled Entry"}
                         </h3>
                       </div>
                       
+                      {/* Rearrange arrows */}
+                      {isRearranging && (
+                        <div className="flex items-center gap-1 z-20 shrink-0">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              moveLog(log.id, 'up');
+                            }}
+                            className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              moveLog(log.id, 'down');
+                            }}
+                            className="p-1 rounded bg-crust hover:bg-surface text-overlay hover:text-hype border border-surface cursor-pointer"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
                       <button
                         onClick={(e) => deleteEntry(log.id, e)}
-                        className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer"
+                        className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer shrink-0 z-20"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>

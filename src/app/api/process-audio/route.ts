@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     // 2. Parse Request Parameters
     const body = await request.json();
-    const { logId, removeFillerWords } = body;
+    const { logId, removeFillerWords, enableSwearWords, customPrompt } = body;
 
     if (!logId) {
       return NextResponse.json({ error: "Bad Request: Missing logId parameter" }, { status: 400 });
@@ -103,6 +103,8 @@ export async function POST(request: NextRequest) {
     // 6. Send Audio to AI Engine for Processing using local file path
     const aiResult = await activeEngine.processAudioFilePath(tempFilePath, mimeType, {
       removeFillerWords: removeFillerWords ?? true,
+      enableSwearWords: enableSwearWords ?? false,
+      customPrompt: customPrompt ?? "",
     });
 
     // 7. Update the Database Record with AI Output (using admin client to prevent RLS update restrictions)

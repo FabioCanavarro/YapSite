@@ -83,3 +83,19 @@ body {
   border: 1px solid rgba(205, 214, 244, 0.15);
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
 }
+
+/* Custom premium animated glow for echoes */
+@keyframes animated-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px var(--glow-color, rgba(203, 166, 247, 0.3));
+    border-color: var(--border-color, rgba(203, 166, 247, 0.2));
+  }
+  50% {
+    box-shadow: 0 0 18px var(--glow-color, rgba(203, 166, 247, 0.6));
+    border-color: var(--glow-color, rgba(203, 166, 247, 0.5));
+  }
+}
+
+.glowing-border-active {
+  animation: animated-glow 3s ease-in-out infinite;
+}
