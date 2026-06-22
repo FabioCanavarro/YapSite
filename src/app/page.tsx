@@ -885,8 +885,77 @@ export default function Dashboard() {
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-base min-h-screen">
-        <Loader2 className="w-8 h-8 text-hype animate-spin" />
+      <div className="flex-1 bg-base min-h-screen pb-28 select-none">
+        {/* Skeleton Header */}
+        <header className="sticky top-0 z-30 bg-base/80 backdrop-blur-md border-b border-surface/50 px-4 py-4">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-surface animate-pulse" />
+              <div className="h-5 w-24 bg-surface rounded-lg animate-pulse" />
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="h-4 w-12 bg-surface rounded-full animate-pulse" />
+              <div className="h-7 w-20 bg-surface rounded-full animate-pulse" />
+              <div className="w-8 h-8 rounded-xl bg-surface animate-pulse" />
+              <div className="w-8 h-8 rounded-xl bg-surface animate-pulse" />
+            </div>
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6 animate-pulse">
+          {/* Skeleton Heatmap/Graph area placeholder */}
+          <div className="w-full h-44 rounded-3xl glass-panel border border-surface/50 p-6 flex flex-col gap-4">
+            <div className="flex justify-between items-center">
+              <div className="h-4 w-36 bg-surface rounded-lg" />
+              <div className="h-3 w-16 bg-surface rounded-lg" />
+            </div>
+            <div className="flex-1 grid grid-cols-7 gap-1 bg-crust/20 rounded-2xl p-2.5" />
+          </div>
+
+          {/* Skeleton Tabs */}
+          <div className="flex gap-2 p-1.5 bg-crust/40 rounded-2xl border border-surface/40 overflow-x-auto">
+            <div className="h-8 w-24 bg-surface rounded-xl" />
+            <div className="h-8 w-24 bg-surface/55 rounded-xl" />
+            <div className="h-8 w-24 bg-surface/55 rounded-xl" />
+            <div className="h-8 w-24 bg-surface/55 rounded-xl" />
+          </div>
+
+          {/* Skeleton Search and Filters */}
+          <div className="w-full flex flex-col gap-3">
+            <div className="w-full h-11 bg-surface rounded-2xl" />
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              <div className="h-8 w-16 bg-surface rounded-xl shrink-0" />
+              <div className="h-8 w-16 bg-surface rounded-xl shrink-0" />
+              <div className="h-8 w-16 bg-surface rounded-xl shrink-0" />
+              <div className="h-8 w-16 bg-surface rounded-xl shrink-0" />
+              <div className="h-8 w-16 bg-surface rounded-xl shrink-0" />
+            </div>
+          </div>
+
+          {/* Skeleton List of Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {[1, 2, 3, 4].map((idx) => (
+              <div
+                key={idx}
+                className="w-full h-36 rounded-3xl p-5 glass-panel border-l-4 border-l-surface flex flex-col gap-3"
+              >
+                <div className="flex justify-between items-start gap-4">
+                  <div className="flex-1 flex flex-col gap-2">
+                    <div className="h-3 w-28 bg-surface rounded-lg" />
+                    <div className="h-5 w-48 bg-surface rounded-lg" />
+                  </div>
+                  <div className="w-6 h-6 rounded-lg bg-surface shrink-0" />
+                </div>
+                <div className="h-3 w-full bg-surface rounded-lg" />
+                <div className="h-3 w-[85%] bg-surface rounded-lg" />
+                <div className="flex gap-1.5 mt-1">
+                  <div className="h-4 w-12 bg-surface rounded-md" />
+                  <div className="h-4 w-16 bg-surface rounded-md" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </main>
       </div>
     );
   }

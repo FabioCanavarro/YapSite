@@ -551,8 +551,67 @@ ${reflections || "*No reflections added yet.*"}
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-base min-h-screen">
-        <Loader2 className="w-8 h-8 text-hype animate-spin" />
+      <div className="flex-1 bg-base min-h-screen pb-28 select-none">
+        {/* Skeleton Header */}
+        <header className="sticky top-0 z-30 bg-base/80 backdrop-blur-md border-b border-surface/50 px-4 py-4">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <div className="w-8 h-8 rounded-xl bg-surface animate-pulse" />
+            <div className="h-5 w-24 bg-surface rounded-lg animate-pulse" />
+            <div className="w-8 h-8 rounded-xl bg-surface animate-pulse" />
+          </div>
+        </header>
+
+        <main className="max-w-4xl mx-auto px-4 mt-6 flex flex-col gap-6 animate-pulse">
+          {/* Skeleton Title & Metadata Card */}
+          <div className="w-full rounded-3xl p-6 glass-panel border-l-4 border-l-surface flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <div className="h-3.5 w-32 bg-surface rounded-lg" />
+              <div className="h-7 w-[60%] bg-surface rounded-lg mt-1" />
+            </div>
+            <div className="flex gap-2">
+              <div className="h-5 w-16 bg-surface rounded-md" />
+              <div className="h-5 w-20 bg-surface rounded-md" />
+            </div>
+          </div>
+
+          {/* Skeleton Audio Playback Card */}
+          <div className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-10 h-10 rounded-full bg-surface shrink-0" />
+              <div className="flex-1 h-3 bg-surface rounded-full" />
+              <div className="h-3 w-10 bg-surface rounded-lg" />
+            </div>
+          </div>
+
+          {/* Skeleton Tidied Thoughts Card */}
+          <div className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4">
+            <div className="flex justify-between items-center">
+              <div className="h-4 w-32 bg-surface rounded-lg" />
+              <div className="w-6 h-6 rounded-lg bg-surface" />
+            </div>
+            <div className="flex flex-col gap-2.5">
+              <div className="h-3.5 w-full bg-surface rounded-lg" />
+              <div className="h-3.5 w-full bg-surface rounded-lg" />
+              <div className="h-3.5 w-[90%] bg-surface rounded-lg" />
+              <div className="h-3.5 w-[95%] bg-surface rounded-lg" />
+              <div className="h-3.5 w-[70%] bg-surface rounded-lg" />
+            </div>
+          </div>
+
+          {/* Skeleton Raw Transcript Card */}
+          <div className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4">
+            <div className="h-4 w-36 bg-surface rounded-lg" />
+            <div className="h-3 w-[90%] bg-surface rounded-lg" />
+            <div className="h-3 w-[85%] bg-surface rounded-lg" />
+          </div>
+
+          {/* Skeleton Reflections Card */}
+          <div className="w-full rounded-3xl p-6 glass-panel flex flex-col gap-4">
+            <div className="h-4 w-40 bg-surface rounded-lg" />
+            <div className="h-3.5 w-[95%] bg-surface rounded-lg" />
+            <div className="h-3.5 w-[90%] bg-surface rounded-lg" />
+          </div>
+        </main>
       </div>
     );
   }
