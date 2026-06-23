@@ -103,7 +103,12 @@ export default function BreathingRecorder({
         try {
           await handleSaveQueueItem(audioBlob, options.mimeType || "audio/webm", "Live Audio Recording", audioBlob.size, Date.now());
           setQueue(prev => prev.map((item, idx) => idx === 0 ? { ...item, status: 'completed' } : item));
-          toast.success("Recording saved successfully! AI analysis running in background.");
+          
+          const formattedSize = audioBlob.size > 1024 * 1024
+            ? `${(audioBlob.size / (1024 * 1024)).toFixed(1)} MB`
+            : `${(audioBlob.size / 1024).toFixed(0)} KB`;
+          
+          toast.success(`Recording saved successfully! (${formattedSize}) AI analysis running in background.`);
           onSuccess();
           onClose();
         } catch (err: any) {
@@ -402,9 +407,23 @@ export default function BreathingRecorder({
         const compressedBlob = await compressAudioFile(file);
 
         updateQueueItemStatus(i, 'uploading');
-        await handleSaveQueueItem(compressedBlob, file.type || "audio/wav", file.name, file.size, file.lastModified);
+        await handleSaveQueueItem(compressedBlob, compressedBlob.type, file.name, compressedBlob.size, file.lastModified);
 
         updateQueueItemStatus(i, 'completed');
+
+        const origSizeStr = file.size > 1024 * 1024
+          ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+          : `${(file.size / 1024).toFixed(0)} KB`;
+          
+        const compSizeStr = compressedBlob.size > 1024 * 1024
+          ? `${(compressedBlob.size / (1024 * 1024)).toFixed(1)} MB`
+          : `${(compressedBlob.size / 1024).toFixed(0)} KB`;
+
+        if (compressedBlob.size < file.size) {
+          toast.success(`"${file.name}" uploaded successfully! Compressed to ${compSizeStr} (was ${origSizeStr}).`);
+        } else {
+          toast.success(`"${file.name}" uploaded successfully! (${compSizeStr})`);
+        }
       } catch (err: any) {
         console.error("Queue item upload failed:", err);
         updateQueueItemStatus(i, 'failed');

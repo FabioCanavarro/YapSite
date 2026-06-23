@@ -1,6 +1,8 @@
 import Groq from "groq-sdk";
 import OpenAI from "openai";
 import * as fs from "fs";
+import { execSync } from "child_process";
+import * as path from "path";
 
 export interface JournalAnalysisResult {
   ai_title: string;
@@ -42,6 +44,19 @@ export class GroqHackClubEngine implements AIEngine {
     });
   }
 
+  private async transcribeSingleFile(filePath: string, langOption: string): Promise<string> {
+    const whisperOptions: any = {
+      file: fs.createReadStream(filePath),
+      model: "whisper-large-v3",
+      response_format: "json",
+    };
+    if (langOption && langOption !== "auto" && langOption !== "multidetect") {
+      whisperOptions.language = langOption;
+    }
+    const transcription = await this.groqClient.audio.transcriptions.create(whisperOptions);
+    return transcription.text || "";
+  }
+
   async processAudioFilePath(
     filePath: string,
     mimeType: string,
@@ -80,20 +95,81 @@ export class GroqHackClubEngine implements AIEngine {
 
     // 1. Transcribe the audio file using Groq Whisper API
     let rawTranscript = "";
+    const stats = fs.statSync(filePath);
+    const fileSizeInBytes = stats.size;
+    const MAX_CHUNK_SIZE = 24 * 1024 * 1024; // 24 MB
+    const chunkFilesToDelete: string[] = [];
+
     try {
-      const whisperOptions: any = {
-        file: fs.createReadStream(filePath),
-        model: "whisper-large-v3",
-        response_format: "json",
-      };
-      if (langOption && langOption !== "auto" && langOption !== "multidetect") {
-        whisperOptions.language = langOption;
+      if (fileSizeInBytes <= MAX_CHUNK_SIZE) {
+        rawTranscript = await this.transcribeSingleFile(filePath, langOption);
+      } else {
+        console.log(`Audio file size (${(fileSizeInBytes / 1024 / 1024).toFixed(1)}MB) exceeds 24MB limit. Splitting...`);
+        
+        let duration = 0;
+        try {
+          const output = execSync(
+            `ffprobe -i "${filePath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+            { encoding: "utf8" }
+          );
+          duration = parseFloat(output.trim());
+        } catch (err) {
+          console.error("Failed to read duration with ffprobe:", err);
+        }
+
+        const numChunks = Math.ceil(fileSizeInBytes / MAX_CHUNK_SIZE);
+        let segmentTime = 300; // default 5 minutes
+        if (duration > 0) {
+          segmentTime = Math.floor(duration / numChunks);
+          if (segmentTime < 10) segmentTime = 10;
+        }
+
+        const tempDir = path.dirname(filePath);
+        const ext = path.extname(filePath);
+        const baseName = path.basename(filePath, ext);
+        const outputPattern = path.join(tempDir, `${baseName}-part-%03d${ext}`);
+
+        const ffmpegCmd = `ffmpeg -y -i "${filePath}" -f segment -segment_time ${segmentTime} -c copy "${outputPattern}"`;
+        console.log(`Executing audio split: ${ffmpegCmd}`);
+        execSync(ffmpegCmd, { stdio: "ignore" });
+
+        const filesInTemp = fs.readdirSync(tempDir);
+        const chunkFiles = filesInTemp
+          .filter(f => f.startsWith(`${baseName}-part-`) && f.endsWith(ext))
+          .sort()
+          .map(f => path.join(tempDir, f));
+
+        chunkFilesToDelete.push(...chunkFiles);
+
+        if (chunkFiles.length === 0) {
+          throw new Error("FFmpeg segment command ran but did not output any chunk files.");
+        }
+
+        console.log(`Audio split complete. Transcribing ${chunkFiles.length} chunks...`);
+        const transcripts: string[] = [];
+        for (let idx = 0; idx < chunkFiles.length; idx++) {
+          const chunkPath = chunkFiles[idx];
+          console.log(`Transcribing chunk ${idx + 1}/${chunkFiles.length}: ${chunkPath} (size: ${(fs.statSync(chunkPath).size / 1024 / 1024).toFixed(1)}MB)`);
+          const text = await this.transcribeSingleFile(chunkPath, langOption);
+          if (text && text.trim().length > 0) {
+            transcripts.push(text.trim());
+          }
+        }
+        rawTranscript = transcripts.join(" ");
       }
-      const transcription = await this.groqClient.audio.transcriptions.create(whisperOptions);
-      rawTranscript = transcription.text;
     } catch (err: any) {
       console.error("Groq Whisper transcription failed:", err);
       throw new Error(`Groq transcription failed: ${err.message || err}`);
+    } finally {
+      for (const chunkPath of chunkFilesToDelete) {
+        if (fs.existsSync(chunkPath)) {
+          try {
+            fs.unlinkSync(chunkPath);
+          } catch (unlinkErr) {
+            console.error(`Failed to delete chunk file: ${chunkPath}`, unlinkErr);
+          }
+        }
+      }
     }
 
     if (!rawTranscript || rawTranscript.trim().length === 0) {
