@@ -44,6 +44,98 @@ export class GroqHackClubEngine implements AIEngine {
     });
   }
 
+  private isCommandAvailable(cmd: string): boolean {
+    try {
+      execSync(`${cmd} -version`, { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private splitWavFile(filePath: string, maxChunkSizeInBytes: number): string[] {
+    const fileBuffer = fs.readFileSync(filePath);
+    
+    // Verify RIFF WAVE header
+    if (fileBuffer.toString("ascii", 0, 4) !== "RIFF" || fileBuffer.toString("ascii", 8, 12) !== "WAVE") {
+      throw new Error("Input file is not a valid RIFF WAVE file.");
+    }
+    
+    const numChannels = fileBuffer.readUInt16LE(22);
+    const sampleRate = fileBuffer.readUInt32LE(24);
+    const bitsPerSample = fileBuffer.readUInt16LE(34);
+    const blockAlign = fileBuffer.readUInt16LE(32);
+
+    if (!numChannels || !sampleRate || !bitsPerSample || !blockAlign) {
+      throw new Error("Invalid WAV format parameters read from header.");
+    }
+    
+    let dataOffset = 44; // Default fallback
+    try {
+      let tempOffset = 12;
+      while (tempOffset < fileBuffer.length - 8) {
+        const chunkId = fileBuffer.toString("ascii", tempOffset, tempOffset + 4);
+        const chunkSize = fileBuffer.readUInt32LE(tempOffset + 4);
+        if (chunkId === "data") {
+          dataOffset = tempOffset + 8;
+          break;
+        }
+        tempOffset += 8 + chunkSize;
+      }
+    } catch (err) {
+      console.warn("Failed to dynamically find WAV data chunk offset, defaulting to 44:", err);
+    }
+    
+    const rawPcmData = fileBuffer.subarray(dataOffset);
+    const totalPcmBytes = rawPcmData.length;
+    
+    const chunks: string[] = [];
+    const tempDir = path.dirname(filePath);
+    const ext = path.extname(filePath);
+    const baseName = path.basename(filePath, ext);
+    
+    let currentOffset = 0;
+    let chunkIdx = 0;
+    
+    while (currentOffset < totalPcmBytes) {
+      let chunkSize = maxChunkSizeInBytes;
+      if (currentOffset + chunkSize > totalPcmBytes) {
+        chunkSize = totalPcmBytes - currentOffset;
+      } else {
+        // Align to block boundaries (samples)
+        chunkSize = Math.floor(chunkSize / blockAlign) * blockAlign;
+      }
+      
+      const chunkPcm = rawPcmData.subarray(currentOffset, currentOffset + chunkSize);
+      currentOffset += chunkSize;
+      
+      // Construct new WAV header
+      const headerBuffer = Buffer.alloc(44);
+      headerBuffer.write("RIFF", 0, "ascii");
+      headerBuffer.writeUInt32LE(36 + chunkPcm.length, 4);
+      headerBuffer.write("WAVE", 8, "ascii");
+      
+      headerBuffer.write("fmt ", 12, "ascii");
+      headerBuffer.writeUInt32LE(16, 16);
+      headerBuffer.writeUInt16LE(1, 20); // PCM
+      headerBuffer.writeUInt16LE(numChannels, 22);
+      headerBuffer.writeUInt32LE(sampleRate, 24);
+      headerBuffer.writeUInt32LE(sampleRate * numChannels * (bitsPerSample / 8), 28);
+      headerBuffer.writeUInt16LE(blockAlign, 32);
+      headerBuffer.writeUInt16LE(bitsPerSample, 34);
+      
+      headerBuffer.write("data", 36, "ascii");
+      headerBuffer.writeUInt32LE(chunkPcm.length, 40);
+      
+      const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.wav`);
+      fs.writeFileSync(chunkFile, Buffer.concat([headerBuffer, chunkPcm]));
+      chunks.push(chunkFile);
+      chunkIdx++;
+    }
+    
+    return chunks;
+  }
+
   private async transcribeSingleFile(filePath: string, langOption: string): Promise<string> {
     const whisperOptions: any = {
       file: fs.createReadStream(filePath),
@@ -106,43 +198,72 @@ export class GroqHackClubEngine implements AIEngine {
       } else {
         console.log(`Audio file size (${(fileSizeInBytes / 1024 / 1024).toFixed(1)}MB) exceeds 24MB limit. Splitting...`);
         
-        let duration = 0;
+        // Read file header to see if it is a WAV file
+        let isWav = false;
         try {
-          const output = execSync(
-            `ffprobe -i "${filePath}" -show_entries format=duration -v quiet -of csv="p=0"`,
-            { encoding: "utf8" }
-          );
-          duration = parseFloat(output.trim());
+          const fd = fs.openSync(filePath, "r");
+          const headerBuf = Buffer.alloc(12);
+          fs.readSync(fd, headerBuf, 0, 12, 0);
+          fs.closeSync(fd);
+          isWav = headerBuf.toString("ascii", 0, 4) === "RIFF" && headerBuf.toString("ascii", 8, 12) === "WAVE";
         } catch (err) {
-          console.error("Failed to read duration with ffprobe:", err);
+          console.warn("Could not read file header to check format:", err);
         }
 
-        const numChunks = Math.ceil(fileSizeInBytes / MAX_CHUNK_SIZE);
-        let segmentTime = 300; // default 5 minutes
-        if (duration > 0) {
-          segmentTime = Math.floor(duration / numChunks);
-          if (segmentTime < 10) segmentTime = 10;
+        const hasFfmpeg = this.isCommandAvailable("ffmpeg");
+        const hasFfprobe = this.isCommandAvailable("ffprobe");
+
+        let chunkFiles: string[] = [];
+
+        if (isWav) {
+          console.log("Using pure JS WAV splitter to segment audio.");
+          chunkFiles = this.splitWavFile(filePath, MAX_CHUNK_SIZE);
+        } else if (hasFfmpeg && hasFfprobe) {
+          console.log("Using system ffmpeg/ffprobe to segment non-WAV audio.");
+          let duration = 0;
+          try {
+            const output = execSync(
+              `ffprobe -i "${filePath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+              { encoding: "utf8" }
+            );
+            duration = parseFloat(output.trim());
+          } catch (err) {
+            console.error("Failed to read duration with ffprobe:", err);
+          }
+
+          const numChunks = Math.ceil(fileSizeInBytes / MAX_CHUNK_SIZE);
+          let segmentTime = 300; // default 5 minutes
+          if (duration > 0) {
+            segmentTime = Math.floor(duration / numChunks);
+            if (segmentTime < 10) segmentTime = 10;
+          }
+
+          const tempDir = path.dirname(filePath);
+          const ext = path.extname(filePath);
+          const baseName = path.basename(filePath, ext);
+          const outputPattern = path.join(tempDir, `${baseName}-part-%03d${ext}`);
+
+          const ffmpegCmd = `ffmpeg -y -i "${filePath}" -f segment -segment_time ${segmentTime} -c copy "${outputPattern}"`;
+          console.log(`Executing audio split: ${ffmpegCmd}`);
+          execSync(ffmpegCmd, { stdio: "ignore" });
+
+          const filesInTemp = fs.readdirSync(tempDir);
+          chunkFiles = filesInTemp
+            .filter(f => f.startsWith(`${baseName}-part-`) && f.endsWith(ext))
+            .sort()
+            .map(f => path.join(tempDir, f));
+        } else {
+          throw new Error(
+            `File size (${(fileSizeInBytes / 1024 / 1024).toFixed(1)}MB) exceeds 25MB limit, ` +
+            `and ffmpeg/ffprobe are not installed on the server to split this non-WAV file. ` +
+            `Please upload a WAV file or ensure ffmpeg/ffprobe are available.`
+          );
         }
-
-        const tempDir = path.dirname(filePath);
-        const ext = path.extname(filePath);
-        const baseName = path.basename(filePath, ext);
-        const outputPattern = path.join(tempDir, `${baseName}-part-%03d${ext}`);
-
-        const ffmpegCmd = `ffmpeg -y -i "${filePath}" -f segment -segment_time ${segmentTime} -c copy "${outputPattern}"`;
-        console.log(`Executing audio split: ${ffmpegCmd}`);
-        execSync(ffmpegCmd, { stdio: "ignore" });
-
-        const filesInTemp = fs.readdirSync(tempDir);
-        const chunkFiles = filesInTemp
-          .filter(f => f.startsWith(`${baseName}-part-`) && f.endsWith(ext))
-          .sort()
-          .map(f => path.join(tempDir, f));
 
         chunkFilesToDelete.push(...chunkFiles);
 
         if (chunkFiles.length === 0) {
-          throw new Error("FFmpeg segment command ran but did not output any chunk files.");
+          throw new Error("Splitting ran but did not output any chunk files.");
         }
 
         console.log(`Audio split complete. Transcribing ${chunkFiles.length} chunks...`);
