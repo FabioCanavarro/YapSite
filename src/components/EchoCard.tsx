@@ -45,7 +45,9 @@ export default function EchoCard({ currentLogId, moodColor, tags }: EchoCardProp
           .from("journal_logs")
           .select("*")
           .eq("user_id", user.id)
-          .neq("id", currentLogId);
+          .neq("id", currentLogId)
+          .neq("processing_status", "settings_profile")
+          .neq("processing_status", "knowledge_base");
 
         // Build OR query filters
         const orConditions: string[] = [];

@@ -37,6 +37,14 @@ interface Profile {
   config: any;
 }
 
+interface KnowledgeBase {
+  facts: string[];
+  scenarios: { title: string; description: string; date: string }[];
+  growth: string[];
+  others: string[];
+  lastUpdated?: string;
+}
+
 const defaultSettings = {
   removeFillerWords: true,
   enableSwearWords: false,
@@ -57,7 +65,11 @@ const defaultSettings = {
   tags: {
     mode: "open" as "open" | "flexible" | "strict",
     list: ["memories", "coding", "troubles", "relationships", "ideas", "dreams"]
-  }
+  },
+  betaMode: false,
+  chatProvider: "hackclub" as "hackclub" | "groq" | "custom_openai",
+  chatApiKey: "",
+  chatModel: ""
 };
 
 const DOCS_MARKDOWN = `
@@ -129,7 +141,22 @@ export default function Dashboard() {
   const [isProcessingPending, setIsProcessingPending] = useState(false);
 
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<"dashboard" | "graph" | "batch" | "documentation">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "graph" | "batch" | "chat" | "knowledge" | "documentation">("dashboard");
+
+  // Beta features, chat and knowledge base state
+  const [betaMode, setBetaMode] = useState(false);
+  const [chatProvider, setChatProvider] = useState<"hackclub" | "groq" | "custom_openai">("hackclub");
+  const [chatApiKey, setChatApiKey] = useState("");
+  const [chatModel, setChatModel] = useState("");
+  
+  const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
+  const [isUpdatingKb, setIsUpdatingKb] = useState(false);
+
+  const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
+    { role: 'assistant', content: "Hey Fabio! Ask me anything about your progress, past entries, goals, or general life patterns." }
+  ]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatSending, setIsChatSending] = useState(false);
 
   // Settings Modal & Profiles state
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -353,6 +380,10 @@ export default function Dashboard() {
     setCustomMoods(config.customMoods ?? defaultSettings.customMoods);
     setCategoriesConfig(config.categories ?? defaultSettings.categories);
     setTagsConfig(config.tags ?? defaultSettings.tags);
+    setBetaMode(config.betaMode ?? false);
+    setChatProvider(config.chatProvider ?? "hackclub");
+    setChatApiKey(config.chatApiKey ?? "");
+    setChatModel(config.chatModel ?? "");
   };
 
   // Unified settings save helper that syncs to DB profile
@@ -369,6 +400,10 @@ export default function Dashboard() {
       customMoods,
       categories: categoriesConfig,
       tags: tagsConfig,
+      betaMode,
+      chatProvider,
+      chatApiKey,
+      chatModel,
       ...updatedFields
     };
 
@@ -380,6 +415,10 @@ export default function Dashboard() {
     if (updatedFields.customMoods !== undefined) setCustomMoods(updatedFields.customMoods);
     if (updatedFields.categories !== undefined) setCategoriesConfig(updatedFields.categories);
     if (updatedFields.tags !== undefined) setTagsConfig(updatedFields.tags);
+    if (updatedFields.betaMode !== undefined) setBetaMode(updatedFields.betaMode);
+    if (updatedFields.chatProvider !== undefined) setChatProvider(updatedFields.chatProvider);
+    if (updatedFields.chatApiKey !== undefined) setChatApiKey(updatedFields.chatApiKey);
+    if (updatedFields.chatModel !== undefined) setChatModel(updatedFields.chatModel);
 
     // Sync state locally
     const updatedProfiles = profiles.map(p => 
@@ -552,6 +591,228 @@ export default function Dashboard() {
   };
 
   // Fetch journal entries once user state is confirmed
+  const fetchKnowledgeBase = async (userId: string) => {
+    const supabase = createClient();
+    try {
+      const { data, error } = await supabase
+        .from("journal_logs")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("processing_status", "knowledge_base")
+        .maybeSingle();
+
+      if (!error && data) {
+        setKnowledgeBase(JSON.parse(data.raw_transcript));
+      } else {
+        setKnowledgeBase(null);
+      }
+    } catch (err) {
+      console.error("Error fetching knowledge base:", err);
+    }
+  };
+
+  const generateKnowledgeBase = async () => {
+    if (!user) return;
+    setIsUpdatingKb(true);
+
+    const toastId = toast.loading("Analyzing journal logs and building Knowledge Base...");
+
+    try {
+      const supabase = createClient();
+      const { data: logsData, error: fetchErr } = await supabase
+        .from("journal_logs")
+        .select("created_at, ai_title, raw_transcript")
+        .eq("user_id", user.id)
+        .neq("processing_status", "settings_profile")
+        .neq("processing_status", "knowledge_base")
+        .order("created_at", { ascending: false });
+
+      if (fetchErr) throw fetchErr;
+
+      if (!logsData || logsData.length === 0) {
+        toast.error("No journal logs found. Record or upload some logs first!", { id: toastId });
+        setIsUpdatingKb(false);
+        return;
+      }
+
+      const logsSummary = logsData
+        .map((log) => `- Date: ${new Date(log.created_at).toLocaleDateString()}, Title: "${log.ai_title || "Untitled"}", Transcript: "${log.raw_transcript || ""}"`)
+        .join("\n\n");
+
+      const systemPrompt = `
+        You are a highly analytical, insightful AI personal journal compiler.
+        Your task is to review the user's past journal logs and construct a unified, structured Knowledge Base of important information.
+        
+        CRITICAL RULES:
+        - EXTRACT ONLY IMPORTANT, PERSISTENT FACTS (e.g. key relationships, project details, user's career or education status, core values, major challenges, health conditions). Do not include trivial details.
+        - SCENARIOS: Compile a list of specific scenarios, events, or situation patterns mentioned in the journals. For each scenario, provide a title, brief description, and approximate date.
+        - GROWTH: Identify areas of personal growth, resilience, positive changes, or lessons learned.
+        - OTHERS: Note any other persistent themes, goals, or important notes.
+        
+        You MUST respond ONLY with a valid JSON object matching the following structure:
+        {
+          "facts": ["Fact 1", "Fact 2", ...],
+          "scenarios": [{"title": "...", "description": "...", "date": "..."}],
+          "growth": ["Growth area 1", ...],
+          "others": ["Other theme 1", ...]
+        }
+        
+        Do not include any markdown, commentary, or wrapper text around the JSON.
+      `;
+
+      const response = await fetch("/api/ai-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: `Here are my past journal logs to analyze and build the Knowledge Base from:\n\n${logsSummary}`,
+            },
+          ],
+          provider: chatProvider,
+          apiKey: chatApiKey,
+          model: chatModel,
+          systemPrompt,
+        }),
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json();
+        throw new Error(errJson.error || "Failed to call AI Chat API");
+      }
+
+      const resJson = await response.json();
+      let aiText = resJson.text.trim();
+      
+      if (aiText.startsWith("```json")) {
+        aiText = aiText.substring(7);
+      }
+      if (aiText.startsWith("```")) {
+        aiText = aiText.substring(3);
+      }
+      if (aiText.endsWith("```")) {
+        aiText = aiText.substring(0, aiText.length - 3);
+      }
+      aiText = aiText.trim();
+
+      const parsedKb: KnowledgeBase = JSON.parse(aiText);
+      parsedKb.lastUpdated = new Date().toISOString();
+
+      const { data: existingRow } = await supabase
+        .from("journal_logs")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("processing_status", "knowledge_base")
+        .maybeSingle();
+
+      let dbResult;
+      if (existingRow) {
+        dbResult = await supabase
+          .from("journal_logs")
+          .update({
+            raw_transcript: JSON.stringify(parsedKb),
+            created_at: new Date().toISOString(),
+          })
+          .eq("id", existingRow.id);
+      } else {
+        dbResult = await supabase
+          .from("journal_logs")
+          .insert({
+            user_id: user.id,
+            audio_url: "knowledge_base",
+            ai_title: "Knowledge Base",
+            raw_transcript: JSON.stringify(parsedKb),
+            processing_status: "knowledge_base",
+            created_at: new Date().toISOString(),
+          });
+      }
+
+      if (dbResult.error) throw dbResult.error;
+
+      setKnowledgeBase(parsedKb);
+      toast.success("Knowledge Base successfully compiled!", { id: toastId });
+
+    } catch (err: any) {
+      console.error("Failed to generate Knowledge Base:", err);
+      toast.error(`Error generating Knowledge Base: ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsUpdatingKb(false);
+    }
+  };
+
+  const handleSendChatMessage = async () => {
+    if (!chatInput.trim() || isChatSending) return;
+    const userText = chatInput.trim();
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", content: userText }]);
+    setIsChatSending(true);
+
+    try {
+      const logsSummary = logs
+        .map((log) => `- Date: ${new Date(log.created_at).toLocaleDateString()}, Title: "${log.ai_title || "Untitled"}", Transcript: "${log.raw_transcript || ""}"`)
+        .join("\n\n");
+
+      const kbContext = knowledgeBase 
+        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\nScenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\nGrowth:\n${knowledgeBase.growth?.join("\n") || ""}`
+        : "No compiled knowledge base available yet.";
+
+      const systemPrompt = `
+        You are Fabio's personal AI journal coach and reflective companion.
+        Your goal is to help him review his progress, trace life themes/scenarios, recognize areas of growth, and give helpful insights.
+        
+        You have access to the user's compiled Knowledge Base:
+        ---
+        ${kbContext}
+        ---
+
+        You also have access to his past journal logs list:
+        ---
+        ${logsSummary}
+        ---
+
+        Provide a supportive, thoughtful response to the user's questions. Refer to specific past entries, dates, or growth metrics where helpful to prove you remember his thoughts. You can use markdown styling (e.g. bold text, bullet points, numbered lists, horizontal lines). Keep the tone warm, clear, and engaging.
+      `;
+
+      const response = await fetch("/api/ai-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            ...chatMessages,
+            { role: "user", content: userText }
+          ],
+          provider: chatProvider,
+          apiKey: chatApiKey,
+          model: chatModel,
+          systemPrompt,
+        }),
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json();
+        throw new Error(errJson.error || "Failed to process chat message");
+      }
+
+      const resJson = await response.json();
+      const reply = resJson.text || "I was unable to formulate a response.";
+
+      setChatMessages((prev) => [...prev, { role: "assistant", content: reply }]);
+
+    } catch (err: any) {
+      console.error("Failed to send chat message:", err);
+      setChatMessages((prev) => [
+        ...prev,
+        { 
+          role: "assistant", 
+          content: `❌ **Error:** Failed to call AI completion: ${err.message || err}. Please verify your API key configurations in the Settings panel.` 
+        }
+      ]);
+    } finally {
+      setIsChatSending(false);
+    }
+  };
+
   const fetchLogs = async () => {
     if (!user) return;
 
@@ -561,6 +822,7 @@ export default function Dashboard() {
         .from("journal_logs")
         .select("*")
         .neq("processing_status", "settings_profile") // Exclude settings logs
+        .neq("processing_status", "knowledge_base") // Exclude knowledge base logs
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -575,6 +837,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (user) {
       fetchLogs();
+      fetchKnowledgeBase(user.id);
     }
   }, [user]);
 
@@ -1218,6 +1481,92 @@ export default function Dashboard() {
                   </label>
                 </div>
 
+                <div className="mt-1">
+                  <label className="flex items-center justify-between p-3 rounded-2xl bg-[#fab387]/10 border border-[#fab387]/30 cursor-pointer select-none hover:bg-[#fab387]/15 transition-colors">
+                    <div className="flex flex-col gap-0.5 pr-2">
+                      <span className="text-xs font-bold text-[#fab387]">Beta Test Features</span>
+                      <span className="text-[9px] text-overlay">Unlock advanced AI Chat, custom API provider configs, and the Knowledge Base</span>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={betaMode}
+                      onChange={(e) => {
+                        const enabled = e.target.checked;
+                        setBetaMode(enabled);
+                        saveSettings({ betaMode: enabled });
+                      }}
+                      className="w-4 h-4 rounded border-[#fab387]/30 bg-surface accent-[#fab387] cursor-pointer"
+                    />
+                  </label>
+                </div>
+
+                {betaMode && (
+                  <div className="flex flex-col gap-3 border border-[#fab387]/20 p-3 rounded-2xl bg-crust/50 mt-1">
+                    <span className="text-xs font-bold text-[#fab387] flex items-center gap-1.5 text-left">
+                      ⚙️ AI Beta Configuration
+                    </span>
+                    
+                    <div className="flex flex-col gap-1.5 text-left">
+                      <label className="text-[10px] font-bold text-text">AI API Provider</label>
+                      <select
+                        value={chatProvider}
+                        onChange={(e) => {
+                          const val = e.target.value as any;
+                          setChatProvider(val);
+                          saveSettings({ chatProvider: val });
+                        }}
+                        className="bg-crust border border-overlay/10 text-[10px] p-2 rounded-xl focus:outline-none cursor-pointer text-text"
+                      >
+                        <option value="hackclub">Hack Club AI Proxy (Default)</option>
+                        <option value="groq">Groq Cloud API</option>
+                        <option value="custom_openai">Custom OpenAI API</option>
+                      </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 text-left">
+                      <label className="text-[10px] font-bold text-text">API Key (Optional, falls back to env)</label>
+                      <input 
+                        type="password" 
+                        placeholder={
+                          chatProvider === "hackclub" 
+                            ? "Falls back to HACK_CLUB_API_KEY..." 
+                            : chatProvider === "groq" 
+                              ? "Falls back to GROQ_API_KEY..." 
+                              : "Falls back to OPENAI_API_KEY..."
+                        }
+                        value={chatApiKey} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setChatApiKey(val);
+                          saveSettings({ chatApiKey: val });
+                        }}
+                        className="bg-crust border border-overlay/10 text-[10px] text-text p-2 rounded-xl focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 text-left">
+                      <label className="text-[10px] font-bold text-text">Model Name</label>
+                      <input 
+                        type="text" 
+                        placeholder={
+                          chatProvider === "hackclub" 
+                            ? "gpt-4o-mini" 
+                            : chatProvider === "groq" 
+                              ? "llama-3.3-70b-versatile" 
+                              : "gpt-4o-mini"
+                        }
+                        value={chatModel} 
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setChatModel(val);
+                          saveSettings({ chatModel: val });
+                        }}
+                        className="bg-crust border border-overlay/10 text-[10px] text-text p-2 rounded-xl focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* Language Selector */}
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-bold text-text">Transcription Language</label>
@@ -1455,6 +1804,10 @@ export default function Dashboard() {
             { id: "dashboard", label: "Dashboard" },
             { id: "graph", label: "Mind Graph" },
             { id: "batch", label: "Batch & History" },
+            ...(betaMode ? [
+              { id: "chat", label: "AI Chat" },
+              { id: "knowledge", label: "Knowledge Base" }
+            ] : []),
             { id: "documentation", label: "Documentation" }
           ].map((tab) => (
             <button
@@ -1919,6 +2272,210 @@ export default function Dashboard() {
         {activeTab === "documentation" && (
           <div className="w-full rounded-3xl p-6 glass-panel border border-surface/50 text-left">
             <MarkdownRenderer content={DOCS_MARKDOWN} />
+          </div>
+        )}
+
+        {/* Tab AI Chat */}
+        {activeTab === "chat" && (
+          <div className="flex flex-col bg-surface border border-overlay/10 rounded-3xl p-5 shadow-lg h-[600px]">
+            {/* Header */}
+            <div className="border-b border-overlay/10 pb-3 mb-4 text-left flex justify-between items-center">
+              <div className="flex flex-col gap-0.5">
+                <h2 className="text-md font-bold text-text flex items-center gap-1.5">
+                  💬 Growth Companion Chat
+                </h2>
+                <p className="text-[10px] text-overlay">Ask about patterns, progress, or insights from your journals</p>
+              </div>
+              <button
+                onClick={() => setChatMessages([
+                  { role: 'assistant', content: "Hey Fabio! Ask me anything about your progress, past entries, goals, or general life patterns." }
+                ])}
+                className="px-2.5 py-1.5 rounded-lg border border-surface text-[10px] text-text hover:text-[#f38ba8] cursor-pointer hover:bg-crust transition-colors"
+                title="Clear Chat History"
+              >
+                Clear History
+              </button>
+            </div>
+
+            {/* Messages Area */}
+            <div className="flex-1 overflow-y-auto flex flex-col gap-4 pr-1 mb-4 select-text">
+              {chatMessages.map((msg, index) => (
+                <div 
+                  key={index}
+                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  <div className={`max-w-[85%] rounded-2xl p-3.5 shadow-sm text-left text-xs leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-hype text-crust font-semibold rounded-br-none'
+                      : 'bg-crust/50 border border-surface text-text rounded-bl-none'
+                  }`}>
+                    {msg.role === 'user' ? (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    ) : (
+                      <MarkdownRenderer content={msg.content} />
+                    )}
+                  </div>
+                </div>
+              ))}
+              {isChatSending && (
+                <div className="flex justify-start">
+                  <div className="bg-crust/50 border border-surface text-text rounded-2xl rounded-bl-none p-3.5 flex items-center gap-2">
+                    <span className="text-[11px] text-overlay animate-pulse">Assistant is typing...</span>
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-hype animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-hype animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-hype animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input Row */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder="Ask about your yaps..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleSendChatMessage();
+                  }
+                }}
+                disabled={isChatSending}
+                className="flex-1 bg-crust border border-overlay/10 rounded-2xl px-4 py-3 text-xs text-text placeholder-overlay focus:outline-none focus:border-hype/50"
+              />
+              <button
+                onClick={handleSendChatMessage}
+                disabled={isChatSending || !chatInput.trim()}
+                className="px-5 rounded-2xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 disabled:opacity-50 transition-transform active:scale-95 cursor-pointer flex items-center justify-center"
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Tab Knowledge Base */}
+        {activeTab === "knowledge" && (
+          <div className="flex flex-col gap-6">
+            <div className="flex justify-between items-center bg-surface border border-overlay/10 rounded-3xl p-6 shadow-sm">
+              <div className="flex flex-col gap-1 text-left">
+                <h2 className="text-lg font-bold text-text">🧠 Compiled Knowledge Base</h2>
+                <p className="text-xs text-overlay">
+                  {knowledgeBase?.lastUpdated 
+                    ? `Last compiled: ${new Date(knowledgeBase.lastUpdated).toLocaleString()}` 
+                    : "No compiled knowledge base found yet. Click below to analyze your journals."}
+                </p>
+              </div>
+              <button
+                disabled={isUpdatingKb}
+                onClick={generateKnowledgeBase}
+                className="px-4 py-2 rounded-xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 disabled:opacity-50 transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
+              >
+                {isUpdatingKb ? "Compiling..." : "🔄 Compile / Refresh"}
+              </button>
+            </div>
+
+            {knowledgeBase ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Important Facts Card */}
+                <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 text-left">
+                  <h3 className="text-sm font-bold text-[#cba6f7] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    📌 Core Facts & Preferences
+                  </h3>
+                  {knowledgeBase.facts && knowledgeBase.facts.length > 0 ? (
+                    <ul className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1">
+                      {knowledgeBase.facts.map((fact, index) => (
+                        <li key={index} className="text-xs text-text/90 leading-relaxed flex items-start gap-2">
+                          <span className="text-hype shrink-0">•</span>
+                          <span>{fact}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-overlay italic">No important facts compiled yet.</p>
+                  )}
+                </div>
+
+                {/* Personal Growth Card */}
+                <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 text-left">
+                  <h3 className="text-sm font-bold text-[#a6e3a1] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    📈 Personal Growth & Lessons
+                  </h3>
+                  {knowledgeBase.growth && knowledgeBase.growth.length > 0 ? (
+                    <ul className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1">
+                      {knowledgeBase.growth.map((growthPoint, index) => (
+                        <li key={index} className="text-xs text-text/90 leading-relaxed flex items-start gap-2">
+                          <span className="text-hype shrink-0">✓</span>
+                          <span>{growthPoint}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-overlay italic">No growth areas compiled yet.</p>
+                  )}
+                </div>
+
+                {/* Scenarios / Events list Card */}
+                <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 md:col-span-2 text-left">
+                  <h3 className="text-sm font-bold text-[#74c7ec] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    🎬 Key Life Scenarios & Events
+                  </h3>
+                  {knowledgeBase.scenarios && knowledgeBase.scenarios.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[28rem] overflow-y-auto pr-1 text-left">
+                      {knowledgeBase.scenarios.map((scenario, index) => (
+                        <div key={index} className="p-3.5 bg-crust/50 border border-surface rounded-2xl flex flex-col gap-1.5">
+                          <div className="flex justify-between items-start gap-2">
+                            <span className="text-xs font-bold text-text leading-tight">{scenario.title}</span>
+                            <span className="text-[9px] font-mono text-overlay shrink-0 bg-surface px-1.5 py-0.5 rounded border border-overlay/5">
+                              {scenario.date}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-text/80 leading-relaxed">{scenario.description}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-overlay italic">No scenarios compiled yet.</p>
+                  )}
+                </div>
+
+                {/* Other Notes/Themes Card */}
+                {knowledgeBase.others && knowledgeBase.others.length > 0 && (
+                  <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 md:col-span-2 text-left">
+                    <h3 className="text-sm font-bold text-[#fab387] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                      💡 General Themes & Goals
+                    </h3>
+                    <ul className="flex flex-col gap-2.5 max-h-60 overflow-y-auto pr-1">
+                      {knowledgeBase.others.map((theme, index) => (
+                        <li key={index} className="text-xs text-text/90 leading-relaxed flex items-start gap-2">
+                          <span className="text-hype shrink-0">•</span>
+                          <span>{theme}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center p-12 bg-surface/30 border border-overlay/10 border-dashed rounded-3xl text-center gap-3">
+                <span className="text-3xl">🧠</span>
+                <p className="text-xs text-text font-bold">No Compiled Knowledge Base</p>
+                <p className="text-[11px] text-overlay max-w-sm">
+                  Click the compile button to analyze your journal entries and build a centralized directory of key facts, growth milestones, and scenarios.
+                </p>
+                <button
+                  disabled={isUpdatingKb}
+                  onClick={generateKnowledgeBase}
+                  className="px-5 py-2.5 rounded-xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 transition-transform active:scale-95 cursor-pointer mt-2"
+                >
+                  {isUpdatingKb ? "Compiling..." : "Build Knowledge Base"}
+                </button>
+              </div>
+            )}
           </div>
         )}
 

@@ -80,6 +80,14 @@ export default function JournalDetail({ params }: PageProps) {
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
 
+  // Beta features, API provider details and KB
+  const [betaMode, setBetaMode] = useState(false);
+  const [chatProvider, setChatProvider] = useState("hackclub");
+  const [chatApiKey, setChatApiKey] = useState("");
+  const [chatModel, setChatModel] = useState("");
+  const [knowledgeBase, setKnowledgeBase] = useState<any>(null);
+  const [isGeneratingReflection, setIsGeneratingReflection] = useState(false);
+
   const [editedCategory, setEditedCategory] = useState("General");
   const [categoriesList, setCategoriesList] = useState<string[]>([]);
   const [showCustomCategoryInput, setShowCustomCategoryInput] = useState(false);
@@ -111,6 +119,18 @@ export default function JournalDetail({ params }: PageProps) {
       if (!user) return;
 
       try {
+        // Fetch knowledge base if exists
+        const { data: kbData } = await supabase
+          .from("journal_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("processing_status", "knowledge_base")
+          .maybeSingle();
+
+        if (kbData) {
+          setKnowledgeBase(JSON.parse(kbData.raw_transcript));
+        }
+
         const { data, error } = await supabase
           .from("journal_logs")
           .select("*")
@@ -125,10 +145,15 @@ export default function JournalDetail({ params }: PageProps) {
           }));
           setProfiles(loadedProfiles);
           
-          // Preselect first profile
+          // Preselect active profile
           const savedActiveName = localStorage.getItem("yapsite_active_profile_name") || loadedProfiles[0].name;
           const active = loadedProfiles.find(p => p.name === savedActiveName) || loadedProfiles[0];
           setSelectedProfileName(active.name);
+
+          setBetaMode(active.config.betaMode ?? false);
+          setChatProvider(active.config.chatProvider ?? "hackclub");
+          setChatApiKey(active.config.chatApiKey ?? "");
+          setChatModel(active.config.chatModel ?? "");
 
           if (active.config.categories?.list) {
             setCategoriesList(active.config.categories.list);
@@ -232,6 +257,81 @@ export default function JournalDetail({ params }: PageProps) {
       }
     };
   }, []);
+
+  const generateAiReflection = async () => {
+    if (!log || isGeneratingReflection) return;
+    setIsGeneratingReflection(true);
+
+    const toastId = toast.loading("Generating personalized AI reflection using your Knowledge Base...");
+
+    try {
+      const kbContext = knowledgeBase 
+        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\nScenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\nGrowth:\n${knowledgeBase.growth?.join("\n") || ""}`
+        : "No compiled knowledge base available yet. Please compile it first in the dashboard.";
+
+      const systemPrompt = `
+        You are Fabio's personal AI journal companion.
+        Your task is to write a warm, personalized, empathetic reflection based on the user's raw transcript and their structured Knowledge Base.
+        
+        Knowledge Base Context:
+        ${kbContext}
+
+        Raw Transcript to Analyze:
+        "${log.raw_transcript || ""}"
+
+        Draft a deep, custom reflection that connects their current situation/words to their broader patterns, past scenarios, or personal growth achievements from the Knowledge Base. Suggest any patterns you notice.
+        You may use Markdown (headers, bold, lists, horizontal lines) to structure your thoughts. Keep the response supportive, therapeutic, and highly relevant.
+      `;
+
+      const response = await fetch("/api/ai-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: "Please generate a personalized reflection/analysis on my current journal entry using my Knowledge Base context."
+            }
+          ],
+          provider: chatProvider,
+          apiKey: chatApiKey,
+          model: chatModel,
+          systemPrompt,
+        }),
+      });
+
+      if (!response.ok) {
+        const errJson = await response.json();
+        throw new Error(errJson.error || "Failed to generate AI reflection");
+      }
+
+      const resJson = await response.json();
+      const reflectionText = resJson.text || "";
+
+      if (!reflectionText) {
+        throw new Error("AI did not return any reflection content.");
+      }
+
+      const supabase = createClient();
+      const { error: updateErr } = await supabase
+        .from("journal_logs")
+        .update({ reflections: reflectionText })
+        .eq("id", log.id);
+
+      if (updateErr) throw updateErr;
+
+      setReflections(reflectionText);
+      setLog(prev => prev ? { ...prev, reflections: reflectionText } : null);
+      
+      toast.success("AI reflection generated successfully!", { id: toastId });
+
+    } catch (err: any) {
+      console.error("AI reflection generation error:", err);
+      toast.error(`Error generating reflection: ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsGeneratingReflection(false);
+    }
+  };
 
   const handleReadAloud = () => {
     if (typeof window === "undefined" || !log) return;
@@ -1106,7 +1206,16 @@ ${reflections || "*No reflections added yet.*"}
                   <span className="italic text-overlay">No retroactive reflections added yet. What did you learn? How do you feel looking back?</span>
                 )}
               </div>
-              <div className="flex justify-end mt-2">
+              <div className="flex justify-end gap-2 mt-2">
+                {betaMode && (
+                  <button
+                    disabled={isGeneratingReflection}
+                    onClick={generateAiReflection}
+                    className="px-4 py-2 rounded-xl bg-[#fab387]/10 hover:bg-[#fab387]/20 border border-[#fab387]/30 text-xs font-semibold text-[#fab387] flex items-center gap-1.5 transition-transform active:scale-95 shadow-sm cursor-pointer disabled:opacity-50"
+                  >
+                    <span>{isGeneratingReflection ? "Thinking..." : "✨ AI Reflection"}</span>
+                  </button>
+                )}
                 <button
                   onClick={() => setIsEditingReflections(true)}
                   className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-semibold text-text flex items-center gap-1.5 transition-transform active:scale-95 shadow-sm cursor-pointer"
