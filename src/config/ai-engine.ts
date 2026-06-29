@@ -136,6 +136,59 @@ export class GroqHackClubEngine implements AIEngine {
     return chunks;
   }
 
+  private splitMp3File(filePath: string, maxChunkSizeInBytes: number): string[] {
+    console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Loading file ${filePath} into memory for segmentation...`);
+    const fileBuffer = fs.readFileSync(filePath);
+    const totalBytes = fileBuffer.length;
+    const chunks: string[] = [];
+    const tempDir = path.dirname(filePath);
+    const ext = path.extname(filePath);
+    const baseName = path.basename(filePath, ext);
+    
+    let currentOffset = 0;
+    let chunkIdx = 0;
+    
+    while (currentOffset < totalBytes) {
+      let targetEnd = currentOffset + maxChunkSizeInBytes;
+      if (targetEnd >= totalBytes) {
+        targetEnd = totalBytes;
+      } else {
+        // Search for the next MP3 frame sync word to split cleanly.
+        // Sync word: byte1 = 0xFF, byte2 high 3 bits set (i.e. (byte2 & 0xE0) === 0xE0)
+        let foundSync = false;
+        // Search forward up to 16KB for a sync word to avoid splitting in the middle of a frame.
+        for (let i = targetEnd; i < Math.min(targetEnd + 16384, totalBytes - 1); i++) {
+          if (fileBuffer[i] === 0xFF && (fileBuffer[i + 1] & 0xE0) === 0xE0) {
+            targetEnd = i;
+            foundSync = true;
+            break;
+          }
+        }
+        // If not found in the forward search, search backward up to 16KB
+        if (!foundSync) {
+          for (let i = targetEnd; i > Math.max(currentOffset, targetEnd - 16384); i--) {
+            if (fileBuffer[i] === 0xFF && (fileBuffer[i + 1] & 0xE0) === 0xE0) {
+              targetEnd = i;
+              foundSync = true;
+              break;
+            }
+          }
+        }
+      }
+      
+      const chunkData = fileBuffer.subarray(currentOffset, targetEnd);
+      currentOffset = targetEnd;
+      
+      const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.mp3`);
+      fs.writeFileSync(chunkFile, chunkData);
+      console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Written chunk ${chunkIdx}: ${chunkFile} (size: ${(chunkData.length / 1024 / 1024).toFixed(2)} MB)`);
+      chunks.push(chunkFile);
+      chunkIdx++;
+    }
+    
+    return chunks;
+  }
+
   private async transcribeSingleFile(filePath: string, langOption: string): Promise<string> {
     const whisperOptions: any = {
       file: fs.createReadStream(filePath),
@@ -193,33 +246,49 @@ export class GroqHackClubEngine implements AIEngine {
     const chunkFilesToDelete: string[] = [];
 
     try {
+      console.log(`[AI Engine] [Vercel Logger] Processing file: ${filePath} (Size: ${(fileSizeInBytes / 1024 / 1024).toFixed(2)} MB, MIME: ${mimeType})`);
       if (fileSizeInBytes <= MAX_CHUNK_SIZE) {
+        console.log(`[AI Engine] [Vercel Logger] File size is within 24MB limit. Transcribing directly...`);
+        const startTime = Date.now();
         rawTranscript = await this.transcribeSingleFile(filePath, langOption);
+        console.log(`[AI Engine] [Vercel Logger] Transcribed single file successfully in ${Date.now() - startTime}ms. Transcript length: ${rawTranscript.length} chars.`);
       } else {
-        console.log(`Audio file size (${(fileSizeInBytes / 1024 / 1024).toFixed(1)}MB) exceeds 24MB limit. Splitting...`);
+        console.log(`[AI Engine] [Vercel Logger] File size exceeds 24MB limit. Initiating splitting flow...`);
         
-        // Read file header to see if it is a WAV file
+        // Read file header to see if it is a WAV or MP3 file
         let isWav = false;
+        let isMp3 = false;
         try {
           const fd = fs.openSync(filePath, "r");
           const headerBuf = Buffer.alloc(12);
           fs.readSync(fd, headerBuf, 0, 12, 0);
           fs.closeSync(fd);
+          
           isWav = headerBuf.toString("ascii", 0, 4) === "RIFF" && headerBuf.toString("ascii", 8, 12) === "WAVE";
+          
+          isMp3 = (headerBuf[0] === 0x49 && headerBuf[1] === 0x44 && headerBuf[2] === 0x33) || // ID3
+                  (headerBuf[0] === 0xFF && (headerBuf[1] & 0xE0) === 0xE0) ||                 // MP3 frame sync
+                  filePath.toLowerCase().endsWith(".mp3");
+          
+          console.log(`[AI Engine] [Vercel Logger] File header analysis: isWav = ${isWav}, isMp3 = ${isMp3}`);
         } catch (err) {
-          console.warn("Could not read file header to check format:", err);
+          console.warn("[AI Engine] [Vercel Logger] Could not read file header to check format:", err);
         }
 
         const hasFfmpeg = this.isCommandAvailable("ffmpeg");
         const hasFfprobe = this.isCommandAvailable("ffprobe");
+        console.log(`[AI Engine] [Vercel Logger] System commands status: hasFfmpeg = ${hasFfmpeg}, hasFfprobe = ${hasFfprobe}`);
 
         let chunkFiles: string[] = [];
 
         if (isWav) {
-          console.log("Using pure JS WAV splitter to segment audio.");
+          console.log("[AI Engine] [Vercel Logger] Selected splitting method: Pure JS WAV Splitter.");
           chunkFiles = this.splitWavFile(filePath, MAX_CHUNK_SIZE);
+        } else if (isMp3) {
+          console.log("[AI Engine] [Vercel Logger] Selected splitting method: Pure JS MP3 Frame Splitter.");
+          chunkFiles = this.splitMp3File(filePath, MAX_CHUNK_SIZE);
         } else if (hasFfmpeg && hasFfprobe) {
-          console.log("Using system ffmpeg/ffprobe to segment non-WAV audio.");
+          console.log("[AI Engine] [Vercel Logger] Selected splitting method: System ffmpeg/ffprobe CLI.");
           let duration = 0;
           try {
             const output = execSync(
@@ -228,7 +297,7 @@ export class GroqHackClubEngine implements AIEngine {
             );
             duration = parseFloat(output.trim());
           } catch (err) {
-            console.error("Failed to read duration with ffprobe:", err);
+            console.error("[AI Engine] [Vercel Logger] Failed to read duration with ffprobe:", err);
           }
 
           const numChunks = Math.ceil(fileSizeInBytes / MAX_CHUNK_SIZE);
@@ -244,7 +313,7 @@ export class GroqHackClubEngine implements AIEngine {
           const outputPattern = path.join(tempDir, `${baseName}-part-%03d${ext}`);
 
           const ffmpegCmd = `ffmpeg -y -i "${filePath}" -f segment -segment_time ${segmentTime} -c copy "${outputPattern}"`;
-          console.log(`Executing audio split: ${ffmpegCmd}`);
+          console.log(`[AI Engine] [Vercel Logger] Executing audio split: ${ffmpegCmd}`);
           execSync(ffmpegCmd, { stdio: "ignore" });
 
           const filesInTemp = fs.readdirSync(tempDir);
@@ -255,28 +324,32 @@ export class GroqHackClubEngine implements AIEngine {
         } else {
           throw new Error(
             `File size (${(fileSizeInBytes / 1024 / 1024).toFixed(1)}MB) exceeds 25MB limit, ` +
-            `and ffmpeg/ffprobe are not installed on the server to split this non-WAV file. ` +
-            `Please upload a WAV file or ensure ffmpeg/ffprobe are available.`
+            `and ffmpeg/ffprobe are not installed on Vercel to split this non-WAV/non-MP3 file. ` +
+            `Please upload a WAV or MP3 file, or configure ffmpeg binaries on the host.`
           );
         }
 
         chunkFilesToDelete.push(...chunkFiles);
 
         if (chunkFiles.length === 0) {
-          throw new Error("Splitting ran but did not output any chunk files.");
+          throw new Error("Splitting completed but did not produce any chunk files.");
         }
 
-        console.log(`Audio split complete. Transcribing ${chunkFiles.length} chunks...`);
+        console.log(`[AI Engine] [Vercel Logger] Audio split completed successfully. Generated ${chunkFiles.length} chunks. Transcribing chunks...`);
         const transcripts: string[] = [];
         for (let idx = 0; idx < chunkFiles.length; idx++) {
           const chunkPath = chunkFiles[idx];
-          console.log(`Transcribing chunk ${idx + 1}/${chunkFiles.length}: ${chunkPath} (size: ${(fs.statSync(chunkPath).size / 1024 / 1024).toFixed(1)}MB)`);
+          const chunkSize = fs.statSync(chunkPath).size;
+          console.log(`[AI Engine] [Vercel Logger] Starting transcription of chunk ${idx + 1}/${chunkFiles.length}: ${chunkPath} (Size: ${(chunkSize / 1024 / 1024).toFixed(2)} MB)`);
+          const chunkStart = Date.now();
           const text = await this.transcribeSingleFile(chunkPath, langOption);
+          console.log(`[AI Engine] [Vercel Logger] Chunk ${idx + 1}/${chunkFiles.length} transcription finished in ${Date.now() - chunkStart}ms. Length: ${text.length} chars.`);
           if (text && text.trim().length > 0) {
             transcripts.push(text.trim());
           }
         }
         rawTranscript = transcripts.join(" ");
+        console.log(`[AI Engine] [Vercel Logger] All chunks transcribed successfully. Merged transcript length: ${rawTranscript.length} chars.`);
       }
     } catch (err: any) {
       console.error("Groq Whisper transcription failed:", err);
@@ -368,7 +441,8 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
 
     if (hasHackClub) {
       try {
-        console.log("Attempting semantic analysis using Hack Club AI...");
+        console.log("[AI Engine] [Vercel Logger] Attempting semantic analysis using Hack Club AI (gpt-4o-mini)...");
+        const llmStart = Date.now();
         const response = await this.openaiClient.chat.completions.create({
           model: "gpt-4o-mini",
           response_format: { type: "json_object" },
@@ -378,18 +452,20 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
           ],
         });
         responseText = response.choices[0]?.message?.content || null;
+        console.log(`[AI Engine] [Vercel Logger] Hack Club AI completion finished successfully in ${Date.now() - llmStart}ms.`);
       } catch (err: any) {
-        console.error("Hack Club AI analysis failed, falling back to Groq Llama:", err);
+        console.error("[AI Engine] [Vercel Logger] Hack Club AI analysis failed, falling back to Groq Llama:", err);
         usedGroqFallback = true;
       }
     } else {
-      console.log("HACK_CLUB_API_KEY is not configured. Falling back to Groq Llama directly.");
+      console.log("[AI Engine] [Vercel Logger] HACK_CLUB_API_KEY is not configured. Falling back to Groq Llama directly.");
       usedGroqFallback = true;
     }
 
     if (usedGroqFallback || !responseText) {
       try {
-        console.log("Performing semantic analysis using Groq Llama fallback (llama-3.3-70b-versatile)...");
+        console.log("[AI Engine] [Vercel Logger] Performing semantic analysis using Groq Llama fallback (llama-3.3-70b-versatile)...");
+        const llmStart = Date.now();
         const response = await this.groqClient.chat.completions.create({
           model: "llama-3.3-70b-versatile",
           response_format: { type: "json_object" },
@@ -399,8 +475,9 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
           ],
         });
         responseText = response.choices[0]?.message?.content || null;
+        console.log(`[AI Engine] [Vercel Logger] Groq Llama completion finished successfully in ${Date.now() - llmStart}ms.`);
       } catch (err: any) {
-        console.error("Groq Llama fallback failed:", err);
+        console.error("[AI Engine] [Vercel Logger] Groq Llama fallback failed:", err);
         throw new Error(`AI analysis failed (both Hack Club and Groq Llama fallback failed): ${err.message || err}`);
       }
     }
@@ -411,8 +488,8 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
 
     try {
       const parsed = JSON.parse(responseText);
-
-      return {
+      
+      const result = {
         ai_title: parsed.ai_title || "Voice Journal Entry",
         ai_mood_color: parsed.ai_mood_color || "#74c7ec",
         raw_transcript: rawTranscript,
@@ -420,8 +497,11 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
         ai_tags: parsed.ai_tags || ["Journal"],
         ai_category: parsed.ai_category || "General",
       };
+
+      console.log(`[AI Engine] [Vercel Logger] Parsing success. Title: "${result.ai_title}", Mood Color: "${result.ai_mood_color}", Category: "${result.ai_category}", Tags: [${result.ai_tags.join(", ")}]`);
+      return result;
     } catch (parseErr: any) {
-      console.error("Failed to parse JSON response from LLM:", responseText);
+      console.error("[AI Engine] [Vercel Logger] Failed to parse JSON response from LLM:", responseText);
       throw new Error(`JSON parsing of AI analysis failed: ${parseErr.message}`);
     }
   }
