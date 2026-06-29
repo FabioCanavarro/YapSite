@@ -427,7 +427,21 @@ export default function BreathingRecorder({
       } catch (err: any) {
         console.error("Queue item upload failed:", err);
         updateQueueItemStatus(i, 'failed');
-        toast.error(`Failed to upload ${file.name}: ${err.message || err}`);
+        const errMsg = err.message || String(err);
+        if (
+          errMsg.toLowerCase().includes("size") || 
+          errMsg.toLowerCase().includes("large") || 
+          errMsg.toLowerCase().includes("exceeds") || 
+          errMsg.toLowerCase().includes("entity too large") || 
+          errMsg.toLowerCase().includes("413")
+        ) {
+          toast.error(
+            `Failed to upload ${file.name}: ${errMsg}. (Tip: Increase the 'Maximum File Size' limit in your Supabase Dashboard under Storage -> audio_journals -> Bucket Settings, or run the storage SQL update schema.)`, 
+            { duration: 10000 }
+          );
+        } else {
+          toast.error(`Failed to upload ${file.name}: ${errMsg}`);
+        }
       }
     }
 
