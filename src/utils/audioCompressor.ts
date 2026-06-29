@@ -46,10 +46,10 @@ export async function compressAudioFile(file: Blob): Promise<Blob> {
 function audioBufferToWav(buffer: AudioBuffer): Blob {
   const numOfChan = buffer.numberOfChannels;
   const sampleRate = buffer.sampleRate;
-  const format = 1; // 1 = Raw PCM 16-bit signed integer
-  const bitDepth = 16;
+  const format = 1; // 1 = Unsigned 8-bit PCM
+  const bitDepth = 8;
   
-  const resultLength = buffer.length * numOfChan * 2 + 44; // 44 bytes header
+  const resultLength = buffer.length * numOfChan * 1 + 44; // 44 bytes header
   const bufferArr = new ArrayBuffer(resultLength);
   const view = new DataView(bufferArr);
   
@@ -87,10 +87,10 @@ function audioBufferToWav(buffer: AudioBuffer): Blob {
       // Clamp values between -1 and 1
       sample = Math.max(-1, Math.min(1, sample));
       
-      // Convert Float32 sample to Int16 PCM sample
-      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-      view.setInt16(pos, intSample, true);
-      pos += 2;
+      // Convert Float32 sample to Unsigned 8-bit PCM (0 to 255, silence is 128)
+      const u8Sample = Math.floor((sample + 1) * 127.5);
+      view.setUint8(pos, u8Sample);
+      pos += 1;
     }
     offset++;
   }
