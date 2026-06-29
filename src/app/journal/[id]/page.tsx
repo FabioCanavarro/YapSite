@@ -266,12 +266,18 @@ export default function JournalDetail({ params }: PageProps) {
 
     try {
       const kbContext = knowledgeBase 
-        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\nScenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\nGrowth:\n${knowledgeBase.growth?.join("\n") || ""}`
+        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\n` +
+          `Strengths:\n${knowledgeBase.strengths?.join("\n") || ""}\n\n` +
+          `Weaknesses:\n${knowledgeBase.weaknesses?.join("\n") || ""}\n\n` +
+          `Relations:\n${JSON.stringify(knowledgeBase.relations || "")}\n\n` +
+          `Locations:\n${JSON.stringify(knowledgeBase.locations || "")}\n\n` +
+          `Scenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\n` +
+          `Growth:\n${knowledgeBase.growth?.join("\n") || ""}`
         : "No compiled knowledge base available yet. Please compile it first in the dashboard.";
 
       const systemPrompt = `
         You are Fabio's personal AI journal companion.
-        Your task is to write a warm, personalized, empathetic reflection based on the user's raw transcript and their structured Knowledge Base.
+        Your task is to write a warm, personalized, empathetic reflection based on the user's raw transcript and their structured Knowledge Base, and also extract the main scenario from this entry for their Knowledge Base.
         
         Knowledge Base Context:
         ${kbContext}
@@ -279,8 +285,22 @@ export default function JournalDetail({ params }: PageProps) {
         Raw Transcript to Analyze:
         "${log.raw_transcript || ""}"
 
-        Draft a deep, custom reflection that connects their current situation/words to their broader patterns, past scenarios, or personal growth achievements from the Knowledge Base. Suggest any patterns you notice.
-        You may use Markdown (headers, bold, lists, horizontal lines) to structure your thoughts. Keep the response supportive, therapeutic, and highly relevant.
+        You MUST respond ONLY with a valid JSON object matching this structure:
+        {
+          "reflection": "Write a deep, custom reflection that connects their current situation/words to their broader patterns, past scenarios, or personal growth achievements from the Knowledge Base. Suggest any patterns you notice. You may use Markdown (headers, bold, lists, horizontal lines) to structure your thoughts. Keep the response supportive, therapeutic, and highly relevant.",
+          "scenario": {
+            "title": "A short descriptive title of this entry's event/story (3-6 words).",
+            "description": "A 1-2 sentence description of what happened in this entry.",
+            "date": "${new Date(log.created_at).toLocaleDateString()}",
+            "detailedSummary": "A detailed summary of the story/scenario from start to finish described in this entry.",
+            "keyMoments": [
+              "Key moment bullet point 1 detailing the progression of this scenario.",
+              "Key moment bullet point 2.",
+              "..."
+            ]
+          }
+        }
+        Do not include any markdown, commentary, or wrapper text around the JSON.
       `;
 
       const response = await fetch("/api/ai-chat", {
@@ -306,7 +326,26 @@ export default function JournalDetail({ params }: PageProps) {
       }
 
       const resJson = await response.json();
-      const reflectionText = resJson.text || "";
+      let aiText = resJson.text || "";
+
+      if (!aiText) {
+        throw new Error("AI did not return any reflection content.");
+      }
+
+      if (aiText.startsWith("```json")) {
+        aiText = aiText.substring(7);
+      }
+      if (aiText.startsWith("```")) {
+        aiText = aiText.substring(3);
+      }
+      if (aiText.endsWith("```")) {
+        aiText = aiText.substring(0, aiText.length - 3);
+      }
+      aiText = aiText.trim();
+
+      const parsedResult = JSON.parse(aiText);
+      const reflectionText = parsedResult.reflection || "";
+      const scenarioData = parsedResult.scenario;
 
       if (!reflectionText) {
         throw new Error("AI did not return any reflection content.");
@@ -322,6 +361,77 @@ export default function JournalDetail({ params }: PageProps) {
 
       setReflections(reflectionText);
       setLog(prev => prev ? { ...prev, reflections: reflectionText } : null);
+
+      // Append new scenario back to Knowledge Base in database
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && scenarioData) {
+        const { data: kbData } = await supabase
+          .from("journal_logs")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("processing_status", "knowledge_base")
+          .maybeSingle();
+
+        let updatedKb: any = {
+          facts: [],
+          scenarios: [],
+          growth: [],
+          strengths: [],
+          weaknesses: [],
+          relations: [],
+          locations: [],
+          others: []
+        };
+
+        if (kbData) {
+          try {
+            const parsed = JSON.parse(kbData.raw_transcript);
+            updatedKb = {
+              ...updatedKb,
+              ...parsed
+            };
+          } catch (e) {
+            console.error("Failed to parse existing KB:", e);
+          }
+        }
+
+        // Avoid duplicate scenarios by checking title match
+        const exists = updatedKb.scenarios.some((s: any) => s.title.toLowerCase() === scenarioData.title.toLowerCase());
+        if (!exists) {
+          updatedKb.scenarios.unshift(scenarioData);
+          updatedKb.lastUpdated = new Date().toISOString();
+
+          let dbResult;
+          if (kbData) {
+            dbResult = await supabase
+              .from("journal_logs")
+              .update({
+                raw_transcript: JSON.stringify(updatedKb),
+                created_at: new Date().toISOString(),
+              })
+              .eq("id", kbData.id);
+          } else {
+            dbResult = await supabase
+              .from("journal_logs")
+              .insert({
+                user_id: user.id,
+                audio_url: "knowledge_base",
+                ai_title: "Knowledge Base",
+                raw_transcript: JSON.stringify(updatedKb),
+                processing_status: "knowledge_base",
+                created_at: new Date().toISOString(),
+              });
+          }
+
+          if (dbResult.error) {
+            console.error("Failed to save updated knowledge base with new scenario:", dbResult.error);
+          } else {
+            setKnowledgeBase(updatedKb);
+            toast.success("AI reflection generated and entry scenario synced to Knowledge Base!", { id: toastId });
+            return;
+          }
+        }
+      }
       
       toast.success("AI reflection generated successfully!", { id: toastId });
 

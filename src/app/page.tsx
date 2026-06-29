@@ -39,8 +39,18 @@ interface Profile {
 
 interface KnowledgeBase {
   facts: string[];
-  scenarios: { title: string; description: string; date: string }[];
+  scenarios: { 
+    title: string; 
+    description: string; 
+    date: string; 
+    detailedSummary?: string; 
+    keyMoments?: string[]; 
+  }[];
   growth: string[];
+  strengths?: string[];
+  weaknesses?: string[];
+  relations?: { name: string; status: string; details: string }[];
+  locations?: { name: string; significance: string }[];
   others: string[];
   lastUpdated?: string;
 }
@@ -151,6 +161,7 @@ export default function Dashboard() {
   
   const [knowledgeBase, setKnowledgeBase] = useState<KnowledgeBase | null>(null);
   const [isUpdatingKb, setIsUpdatingKb] = useState(false);
+  const [expandedScenarioIdx, setExpandedScenarioIdx] = useState<number | null>(null);
 
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([
     { role: 'assistant', content: "Hey Fabio! Ask me anything about your progress, past entries, goals, or general life patterns." }
@@ -644,16 +655,51 @@ export default function Dashboard() {
         Your task is to review the user's past journal logs and construct a unified, structured Knowledge Base of important information.
         
         CRITICAL RULES:
-        - EXTRACT ONLY IMPORTANT, PERSISTENT FACTS (e.g. key relationships, project details, user's career or education status, core values, major challenges, health conditions). Do not include trivial details.
-        - SCENARIOS: Compile a list of specific scenarios, events, or situation patterns mentioned in the journals. For each scenario, provide a title, brief description, and approximate date.
+        - EXTRACT ONLY IMPORTANT, PERSISTENT FACTS (e.g. key preferences, core values, major challenges, health conditions, career details). Do not include trivial details.
+        - SCENARIOS (Key Life Scenarios & Events): Compile a list of specific scenarios, events, or situation patterns mentioned in the journals. For each scenario, provide:
+          - "title": a clear, descriptive title.
+          - "description": a brief, high-level description.
+          - "date": approximate date/time.
+          - "detailedSummary": a detailed description of the scenario from start to finish, explaining how it evolved, what happened, and what was learnt.
+          - "keyMoments": a list of bullet points (at least 3-5) describing the important moments and details from start to finish so it can act as a high-fidelity memory.
         - GROWTH: Identify areas of personal growth, resilience, positive changes, or lessons learned.
+        - STRENGTHS: Extract 3-7 core personal strengths shown by the user.
+        - WEAKNESSES: Extract 3-7 core personal weaknesses or areas needing improvement.
+        - RELATIONS (User Relations): Detail relationships with specific people (names). For each, specify:
+          - "name": the person's name.
+          - "status": the state/dynamic of the relationship (e.g., good, bad, complex, group chat interactions, school dynamic, etc.).
+          - "details": specific detailed descriptions of interactions or dynamics.
+        - LOCATIONS: Detail any physical locations/places mentioned (e.g. workspace, specific cities, vacation spots) and their "significance" to the user.
         - OTHERS: Note any other persistent themes, goals, or important notes.
         
         You MUST respond ONLY with a valid JSON object matching the following structure:
         {
           "facts": ["Fact 1", "Fact 2", ...],
-          "scenarios": [{"title": "...", "description": "...", "date": "..."}],
+          "scenarios": [
+            {
+              "title": "Scenario Title",
+              "description": "Short description",
+              "date": "Approximate date",
+              "detailedSummary": "Detailed description from start to finish",
+              "keyMoments": ["Moment bullet point 1", "Moment bullet point 2", ...]
+            }
+          ],
           "growth": ["Growth area 1", ...],
+          "strengths": ["Strength 1", ...],
+          "weaknesses": ["Weakness 1", ...],
+          "relations": [
+            {
+              "name": "Person Name",
+              "status": "Good/Bad/Complex/etc",
+              "details": "Details about their relationship and group chat or group dynamic"
+            }
+          ],
+          "locations": [
+            {
+              "name": "Location Name",
+              "significance": "Why this place matters"
+            }
+          ],
           "others": ["Other theme 1", ...]
         }
         
@@ -754,7 +800,13 @@ export default function Dashboard() {
         .join("\n\n");
 
       const kbContext = knowledgeBase 
-        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\nScenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\nGrowth:\n${knowledgeBase.growth?.join("\n") || ""}`
+        ? `Knowledge Base Facts:\n${knowledgeBase.facts?.join("\n") || ""}\n\n` +
+          `Strengths:\n${knowledgeBase.strengths?.join("\n") || ""}\n\n` +
+          `Weaknesses:\n${knowledgeBase.weaknesses?.join("\n") || ""}\n\n` +
+          `Relations:\n${JSON.stringify(knowledgeBase.relations || "")}\n\n` +
+          `Locations:\n${JSON.stringify(knowledgeBase.locations || "")}\n\n` +
+          `Scenarios:\n${JSON.stringify(knowledgeBase.scenarios || "")}\n\n` +
+          `Growth:\n${knowledgeBase.growth?.join("\n") || ""}`
         : "No compiled knowledge base available yet.";
 
       const systemPrompt = `
@@ -2387,7 +2439,7 @@ export default function Dashboard() {
                     📌 Core Facts & Preferences
                   </h3>
                   {knowledgeBase.facts && knowledgeBase.facts.length > 0 ? (
-                    <ul className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1">
+                    <ul className="flex flex-col gap-2.5 max-h-80 overflow-y-auto pr-1">
                       {knowledgeBase.facts.map((fact, index) => (
                         <li key={index} className="text-xs text-text/90 leading-relaxed flex items-start gap-2">
                           <span className="text-hype shrink-0">•</span>
@@ -2406,7 +2458,7 @@ export default function Dashboard() {
                     📈 Personal Growth & Lessons
                   </h3>
                   {knowledgeBase.growth && knowledgeBase.growth.length > 0 ? (
-                    <ul className="flex flex-col gap-2.5 max-h-96 overflow-y-auto pr-1">
+                    <ul className="flex flex-col gap-2.5 max-h-80 overflow-y-auto pr-1">
                       {knowledgeBase.growth.map((growthPoint, index) => (
                         <li key={index} className="text-xs text-text/90 leading-relaxed flex items-start gap-2">
                           <span className="text-hype shrink-0">✓</span>
@@ -2419,34 +2471,168 @@ export default function Dashboard() {
                   )}
                 </div>
 
+                {/* Strengths & Weaknesses Card */}
+                <div className="glass-panel p-5 rounded-3xl md:col-span-2 flex flex-col gap-4 text-left">
+                  <h3 className="text-sm font-bold text-[#fab387] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    💪 Strengths & Weaknesses
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    {/* Strengths */}
+                    <div className="flex flex-col gap-2">
+                      <h4 className="text-[11px] font-bold text-[#a6e3a1] uppercase tracking-wide">Strengths</h4>
+                      {knowledgeBase.strengths && knowledgeBase.strengths.length > 0 ? (
+                        <ul className="flex flex-col gap-2">
+                          {knowledgeBase.strengths.map((str, idx) => (
+                            <li key={idx} className="text-xs text-text/80 leading-relaxed flex items-start gap-1.5">
+                              <span className="text-[#a6e3a1]">•</span>
+                              <span>{str}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-xs text-overlay italic">No strengths compiled yet.</p>
+                      )}
+                    </div>
+                    {/* Weaknesses */}
+                    <div className="flex flex-col gap-2">
+                      <h4 className="text-[11px] font-bold text-[#f38ba8] uppercase tracking-wide">Weaknesses</h4>
+                      {knowledgeBase.weaknesses && knowledgeBase.weaknesses.length > 0 ? (
+                        <ul className="flex flex-col gap-2">
+                          {knowledgeBase.weaknesses.map((weak, idx) => (
+                            <li key={idx} className="text-xs text-text/80 leading-relaxed flex items-start gap-1.5">
+                              <span className="text-[#f38ba8]">•</span>
+                              <span>{weak}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-xs text-overlay italic">No weaknesses compiled yet.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* User Relations Card */}
+                <div className="glass-panel p-5 rounded-3xl md:col-span-2 flex flex-col gap-3 text-left">
+                  <h3 className="text-sm font-bold text-[#f5c2e7] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    👥 User Relations
+                  </h3>
+                  {knowledgeBase.relations && knowledgeBase.relations.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-80 overflow-y-auto pr-1">
+                      {knowledgeBase.relations.map((relation, idx) => {
+                        const isGood = relation.status.toLowerCase().includes("good");
+                        const isBad = relation.status.toLowerCase().includes("bad");
+                        const badgeColor = isGood 
+                          ? "bg-[#a6e3a1]/15 text-[#a6e3a1] border-[#a6e3a1]/20" 
+                          : isBad 
+                            ? "bg-[#f38ba8]/15 text-[#f38ba8] border-[#f38ba8]/20" 
+                            : "bg-[#f9e2af]/15 text-[#f9e2af] border-[#f9e2af]/20";
+                        return (
+                          <div key={idx} className="p-3 bg-crust/40 border border-surface/50 rounded-2xl flex flex-col gap-1.5">
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-xs font-bold text-text">{relation.name}</span>
+                              <span className={`text-[9px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full border ${badgeColor}`}>
+                                {relation.status}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-text/75 leading-relaxed">{relation.details}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-overlay italic">No relationships tracked yet.</p>
+                  )}
+                </div>
+
+                {/* Locations Card */}
+                <div className="glass-panel p-5 rounded-3xl md:col-span-2 flex flex-col gap-3 text-left">
+                  <h3 className="text-sm font-bold text-[#89b4fa] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    📍 Key Locations
+                  </h3>
+                  {knowledgeBase.locations && knowledgeBase.locations.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-60 overflow-y-auto pr-1">
+                      {knowledgeBase.locations.map((loc, idx) => (
+                        <div key={idx} className="p-2.5 bg-crust/40 border border-surface/50 rounded-xl flex flex-col gap-0.5">
+                          <span className="text-xs font-bold text-text">{loc.name}</span>
+                          <span className="text-[10px] text-text/70 leading-normal">{loc.significance}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-overlay italic">No locations tracked yet.</p>
+                  )}
+                </div>
+
                 {/* Scenarios / Events list Card */}
-                <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 md:col-span-2 text-left">
+                <div className="glass-panel p-5 rounded-3xl md:col-span-2 flex flex-col gap-3 text-left">
                   <h3 className="text-sm font-bold text-[#74c7ec] uppercase tracking-wider border-b border-overlay/10 pb-2">
                     🎬 Key Life Scenarios & Events
                   </h3>
                   {knowledgeBase.scenarios && knowledgeBase.scenarios.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[28rem] overflow-y-auto pr-1 text-left">
-                      {knowledgeBase.scenarios.map((scenario, index) => (
-                        <div key={index} className="p-3.5 bg-crust/50 border border-surface rounded-2xl flex flex-col gap-1.5">
-                          <div className="flex justify-between items-start gap-2">
-                            <span className="text-xs font-bold text-text leading-tight">{scenario.title}</span>
-                            <span className="text-[9px] font-mono text-overlay shrink-0 bg-surface px-1.5 py-0.5 rounded border border-overlay/5">
-                              {scenario.date}
-                            </span>
+                    <div className="flex flex-col gap-3 max-h-[36rem] overflow-y-auto pr-1 text-left">
+                      {knowledgeBase.scenarios.map((scenario, index) => {
+                        const isExpanded = expandedScenarioIdx === index;
+                        return (
+                          <div 
+                            key={index} 
+                            onClick={() => setExpandedScenarioIdx(isExpanded ? null : index)}
+                            className="p-4 bg-crust/50 hover:bg-crust/80 border border-surface rounded-2xl flex flex-col gap-2 transition-all cursor-pointer select-none"
+                          >
+                            <div className="flex justify-between items-start gap-3">
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-text hover:text-hype transition-colors">{scenario.title}</span>
+                                <span className="text-[10px] text-text/80 mt-0.5">{scenario.description}</span>
+                              </div>
+                              <span className="text-[9px] font-mono text-overlay shrink-0 bg-surface px-1.5 py-0.5 rounded border border-overlay/5">
+                                {scenario.date}
+                              </span>
+                            </div>
+
+                            <AnimatePresence initial={false}>
+                              {isExpanded && (
+                                <motion.div
+                                  initial={{ height: 0, opacity: 0 }}
+                                  animate={{ height: "auto", opacity: 1 }}
+                                  exit={{ height: 0, opacity: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="overflow-hidden border-t border-surface/50 pt-2.5 mt-1 flex flex-col gap-3 text-left"
+                                >
+                                  {scenario.detailedSummary && (
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="text-[9px] uppercase tracking-wider font-semibold text-overlay">Detailed Summary</span>
+                                      <p className="text-[11px] text-text/80 leading-relaxed font-sans">{scenario.detailedSummary}</p>
+                                    </div>
+                                  )}
+                                  {scenario.keyMoments && scenario.keyMoments.length > 0 && (
+                                    <div className="flex flex-col gap-1">
+                                      <span className="text-[9px] uppercase tracking-wider font-semibold text-overlay">Key Moments (Chronology)</span>
+                                      <ul className="flex flex-col gap-1.5 pl-1">
+                                        {scenario.keyMoments.map((moment, mIdx) => (
+                                          <li key={mIdx} className="text-[11px] text-text/80 leading-relaxed flex items-start gap-2">
+                                            <span className="text-hype shrink-0">•</span>
+                                            <span>{moment}</span>
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  )}
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
-                          <p className="text-[11px] text-text/80 leading-relaxed">{scenario.description}</p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <p className="text-xs text-overlay italic">No scenarios compiled yet.</p>
                   )}
                 </div>
 
-                {/* Other Notes/Themes Card */}
+                {/* Other Themes Card */}
                 {knowledgeBase.others && knowledgeBase.others.length > 0 && (
                   <div className="glass-panel p-5 rounded-3xl flex flex-col gap-3 md:col-span-2 text-left">
-                    <h3 className="text-sm font-bold text-[#fab387] uppercase tracking-wider border-b border-overlay/10 pb-2">
+                    <h3 className="text-sm font-bold text-[#b4befe] uppercase tracking-wider border-b border-overlay/10 pb-2">
                       💡 General Themes & Goals
                     </h3>
                     <ul className="flex flex-col gap-2.5 max-h-60 overflow-y-auto pr-1">

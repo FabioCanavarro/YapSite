@@ -25,6 +25,7 @@ export interface AIEngine {
       customMoods?: { name: string; color: string }[];
       categories?: { mode: 'open' | 'flexible' | 'strict'; list: string[] };
       tags?: { mode: 'open' | 'flexible' | 'strict'; list: string[] };
+      knowledgeBaseContext?: string;
     }
   ): Promise<JournalAnalysisResult>;
 }
@@ -213,6 +214,7 @@ export class GroqHackClubEngine implements AIEngine {
       customMoods?: { name: string; color: string }[];
       categories?: { mode: 'open' | 'flexible' | 'strict'; list: string[] };
       tags?: { mode: 'open' | 'flexible' | 'strict'; list: string[] };
+      knowledgeBaseContext?: string;
     }
   ): Promise<JournalAnalysisResult> {
     const groqApiKey = process.env.GROQ_API_KEY;
@@ -397,6 +399,11 @@ export class GroqHackClubEngine implements AIEngine {
       You are an empathetic, silent listening journal assistant.
       You are provided with a raw transcript of the user's audio journal entry.
       Analyze the text to assess emotional tone, clean up grammar/syntax, format it, and extract details.
+
+      ${options?.knowledgeBaseContext ? `BACKGROUND KNOWLEDGE BASE CONTEXT:
+      Use the following compiled facts, history, strengths, weaknesses, relations, and scenario patterns to contextualize this current entry (understand recurring patterns, people, or preferences):
+      ${options.knowledgeBaseContext}
+      ` : ""}
 
       LANGUAGE DIRECTION:
       Output ALL fields ("ai_title", "ai_category", "ai_tags", "tidied_log") in the same language as detected in the raw transcript. If the transcript is in Spanish, output all fields in Spanish. If in Portuguese, output in Portuguese.

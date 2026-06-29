@@ -100,6 +100,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `Failed to download audio file: ${downloadErr.message}` }, { status: 500 });
     }
 
+    // 5.5 Fetch User's Knowledge Base if it exists to pass as background prompt context
+    let kbContext = "";
+    try {
+      const { data: kbData } = await adminSupabase
+        .from("journal_logs")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("processing_status", "knowledge_base")
+        .maybeSingle();
+
+      if (kbData) {
+        const parsed = JSON.parse(kbData.raw_transcript);
+        kbContext = `Knowledge Base Facts:\n${parsed.facts?.join("\n") || ""}\n\n` +
+          `Strengths:\n${parsed.strengths?.join("\n") || ""}\n\n` +
+          `Weaknesses:\n${parsed.weaknesses?.join("\n") || ""}\n\n` +
+          `Relations:\n${JSON.stringify(parsed.relations || "")}\n\n` +
+          `Locations:\n${JSON.stringify(parsed.locations || "")}\n\n` +
+          `Scenarios:\n${JSON.stringify(parsed.scenarios || "")}\n\n` +
+          `Growth:\n${parsed.growth?.join("\n") || ""}`;
+        console.log(`[process-audio] Loaded Knowledge Base context (${kbContext.length} chars) for user ${user.id}`);
+      }
+    } catch (kbErr) {
+      console.error("[process-audio] Failed to load user knowledge base for context:", kbErr);
+    }
+
     // 6. Send Audio to AI Engine for Processing using local file path
     const aiResult = await activeEngine.processAudioFilePath(tempFilePath, mimeType, {
       removeFillerWords: removeFillerWords ?? true,
@@ -109,6 +134,7 @@ export async function POST(request: NextRequest) {
       customMoods,
       categories,
       tags,
+      knowledgeBaseContext: kbContext,
     });
 
     // 7. Extract existing custom tags to preserve them, but replace/add the category tag
