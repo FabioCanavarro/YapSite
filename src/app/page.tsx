@@ -7,7 +7,7 @@ import {
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
   Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
-  Plus, CheckSquare, Square, Play, History, Edit2
+  Plus, CheckSquare, Square, Play, History, Edit2, Download
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -785,6 +785,20 @@ export default function Dashboard() {
     } finally {
       setIsUpdatingKb(false);
     }
+  };
+
+  const handleDownloadKb = () => {
+    if (!knowledgeBase) return;
+    const blob = new Blob([JSON.stringify(knowledgeBase, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "yapsite_knowledge_base.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success("Knowledge Base JSON downloaded!");
   };
 
   const handleSendChatMessage = async () => {
@@ -2421,13 +2435,25 @@ export default function Dashboard() {
                     : "No compiled knowledge base found yet. Click below to analyze your journals."}
                 </p>
               </div>
-              <button
-                disabled={isUpdatingKb}
-                onClick={generateKnowledgeBase}
-                className="px-4 py-2 rounded-xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 disabled:opacity-50 transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5 shrink-0"
-              >
-                {isUpdatingKb ? "Compiling..." : "🔄 Compile / Refresh"}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                {knowledgeBase && (
+                  <button
+                    onClick={handleDownloadKb}
+                    className="px-4 py-2 rounded-xl bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-bold text-text transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5"
+                    title="Download KB as JSON"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download JSON</span>
+                  </button>
+                )}
+                <button
+                  disabled={isUpdatingKb}
+                  onClick={generateKnowledgeBase}
+                  className="px-4 py-2 rounded-xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 disabled:opacity-50 transition-transform active:scale-95 cursor-pointer flex items-center gap-1.5"
+                >
+                  {isUpdatingKb ? "Compiling..." : "🔄 Compile / Refresh"}
+                </button>
+              </div>
             </div>
 
             {knowledgeBase ? (

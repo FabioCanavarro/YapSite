@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   ArrowLeft, Volume2, VolumeX, FileText, Check, 
-  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X
+  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -723,6 +723,34 @@ ${content}`;
     toast.success(`${type} thoughts copied to clipboard!`);
   };
 
+  const handleDownloadText = (content: string, type: "Tidied" | "Raw") => {
+    if (!log) return;
+    const dateFormatted = new Date(log.created_at).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+    
+    const safeTitle = (log.ai_title || "Untitled Entry")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/(^_+|_+$)/g, "");
+      
+    const filename = `${safeTitle || "entry"}_${type.toLowerCase()}_${dateFormatted.replace(/,?\s+/g, "_")}.txt`;
+    
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast.success(`${type} thoughts downloaded as TXT!`);
+  };
+
   const handleObsidianExport = () => {
     if (!log) return;
 
@@ -1135,6 +1163,13 @@ ${reflections || "*No reflections added yet.*"}
             
             <div className="flex items-center gap-2">
               <button
+                onClick={() => handleDownloadText(log.tidied_log, "Tidied")}
+                className="p-2 rounded-full border bg-surface border-overlay/10 text-text hover:text-hype hover:border-hype/20 transition-all cursor-pointer"
+                title="Download as TXT"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => handleCopyText(log.tidied_log, "Tidied")}
                 className="p-2 rounded-full border bg-surface border-overlay/10 text-text hover:text-hype hover:border-hype/20 transition-all cursor-pointer"
                 title="Copy to Clipboard"
@@ -1232,13 +1267,22 @@ ${reflections || "*No reflections added yet.*"}
             <h3 className="text-xs font-semibold tracking-wider text-overlay uppercase">
               Raw Speech Transcript
             </h3>
-            <button
-              onClick={() => handleCopyText(log.raw_transcript, "Raw")}
-              className="p-1.5 rounded-lg border bg-surface border-overlay/10 text-overlay hover:text-text hover:border-overlay/20 transition-all cursor-pointer"
-              title="Copy to Clipboard"
-            >
-              <Copy className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleDownloadText(log.raw_transcript, "Raw")}
+                className="p-1.5 rounded-lg border bg-surface border-overlay/10 text-overlay hover:text-text hover:border-overlay/20 transition-all cursor-pointer"
+                title="Download as TXT"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => handleCopyText(log.raw_transcript, "Raw")}
+                className="p-1.5 rounded-lg border bg-surface border-overlay/10 text-overlay hover:text-text hover:border-overlay/20 transition-all cursor-pointer"
+                title="Copy to Clipboard"
+              >
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
           <div className="text-sm text-overlay leading-relaxed italic whitespace-pre-wrap pl-3 border-l border-surface">
             "{log.raw_transcript || "Empty transcript data."}"
