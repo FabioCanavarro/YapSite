@@ -105,6 +105,7 @@ export default function JournalDetail({ params }: PageProps) {
   const [isEditingTidied, setIsEditingTidied] = useState(false);
   const [editedTidiedText, setEditedTidiedText] = useState("");
   const [isSavingTidied, setIsSavingTidied] = useState(false);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
 
   // Sync Profiles re-analysis states
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -726,19 +727,62 @@ ${content}`;
   const handleDownloadText = (content: string, type: "Tidied" | "Raw") => {
     if (!log) return;
     const dateFormatted = new Date(log.created_at).toLocaleDateString("en-US", {
-      month: "short",
+      weekday: "long",
+      month: "long",
       day: "numeric",
-      year: "numeric"
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit"
     });
+
+    const categoryTag = log.custom_tags?.find((t: string) => t.startsWith("_category:"));
+    const categoryName = categoryTag ? categoryTag.replace("_category:", "") : "General";
+
+    const sizeTag = log.custom_tags?.find((t) => t.startsWith("_filesize:"));
+    let formattedSize = "Unknown";
+    if (sizeTag) {
+      const bytes = parseInt(sizeTag.split(":")[1], 10);
+      if (!isNaN(bytes)) {
+        if (bytes > 1024 * 1024) {
+          formattedSize = `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        } else {
+          formattedSize = `${(bytes / 1024).toFixed(0)} KB`;
+        }
+      }
+    }
+
+    const formattedDuration = audioDuration !== null 
+      ? (() => {
+          const mins = Math.floor(audioDuration / 60);
+          const secs = Math.floor(audioDuration % 60);
+          return `${mins}m ${secs}s`;
+        })()
+      : "Unknown";
+
+    const header = `==================================================
+JOURNAL ENTRY: ${log.ai_title || "Untitled Entry"}
+Recorded Date: ${dateFormatted}
+Duration: ${formattedDuration}
+File Size: ${formattedSize}
+Category: ${categoryName}
+Tags: ${log.ai_tags?.map(t => `#${t}`).join(" ") || "None"}
+==================================================
+
+`;
     
     const safeTitle = (log.ai_title || "Untitled Entry")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/(^_+|_+$)/g, "");
       
-    const filename = `${safeTitle || "entry"}_${type.toLowerCase()}_${dateFormatted.replace(/,?\s+/g, "_")}.txt`;
+    const filenameDate = new Date(log.created_at).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric"
+    });
+    const filename = `${safeTitle || "entry"}_${type.toLowerCase()}_${filenameDate.replace(/,?\s+/g, "_")}.txt`;
     
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([header + content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -1138,10 +1182,14 @@ ${reflections || "*No reflections added yet.*"}
                 ))}
               </div>
 
-              {/* Audio Player */}
               {audioPlaybackUrl && (
                 <div className="w-full mt-4 p-2 rounded-2xl bg-crust border border-surface/50">
-                  <audio src={audioPlaybackUrl} controls className="w-full h-10 accent-hype opacity-90" />
+                  <audio 
+                    src={audioPlaybackUrl} 
+                    controls 
+                    className="w-full h-10 accent-hype opacity-90"
+                    onLoadedMetadata={(e) => setAudioDuration(e.currentTarget.duration)}
+                  />
                 </div>
               )}
             </>
