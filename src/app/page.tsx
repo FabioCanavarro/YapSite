@@ -7,7 +7,7 @@ import {
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
   Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
-  Plus, CheckSquare, Square, Play, History, Edit2, Download
+  Plus, CheckSquare, Square, Play, History, Edit2, Download, MessageSquare, Clock, Edit3, Database
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -16,6 +16,12 @@ import YapHeatmap from "@/components/YapHeatmap";
 import BreathingRecorder from "@/components/BreathingRecorder";
 import ObsidianGraph from "@/components/ObsidianGraph";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
+import QuickJournalModal from "@/components/QuickJournalModal";
+import JournalAIChatDrawer from "@/components/JournalAIChatDrawer";
+import DailyJournalCard from "@/components/DailyJournalCard";
+import JournalSkeleton from "@/components/JournalSkeleton";
+import DatabaseUsageModal from "@/components/DatabaseUsageModal";
+import { animateSkeletonToContent, startPulseAnimation, animateStaggerList } from "@/utils/gsapAnimations";
 
 interface Log {
   id: string;
@@ -151,7 +157,10 @@ export default function Dashboard() {
   const [isProcessingPending, setIsProcessingPending] = useState(false);
 
   // Tab navigation state
-  const [activeTab, setActiveTab] = useState<"dashboard" | "graph" | "batch" | "chat" | "knowledge" | "documentation">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "daily" | "graph" | "batch" | "chat" | "knowledge" | "documentation">("dashboard");
+  const [isQuickJournalOpen, setIsQuickJournalOpen] = useState(false);
+  const [selectedChatLog, setSelectedChatLog] = useState<Log | null>(null);
+  const [isDbUsageModalOpen, setIsDbUsageModalOpen] = useState(false);
 
   // Beta features, chat and knowledge base state
   const [betaMode, setBetaMode] = useState(false);
@@ -1385,6 +1394,16 @@ export default function Dashboard() {
               {activeProfileName}
             </span>
 
+            {/* Database & CDN Storage Usage Button */}
+            <button
+              onClick={() => setIsDbUsageModalOpen(true)}
+              title="Database & Storage Usage"
+              className="px-3 py-1.5 rounded-xl bg-sky-950/70 hover:bg-sky-900/90 border border-sky-500/40 text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-transform duration-200 active:scale-95 cursor-pointer shadow-sm"
+            >
+              <Database className="w-3.5 h-3.5 text-sky-400 animate-pulse" />
+              <span className="hidden sm:inline">DB Usage</span>
+            </button>
+
             {/* Settings Button */}
             <button
               onClick={() => setIsSettingsOpen(true)}
@@ -1868,6 +1887,7 @@ export default function Dashboard() {
         <div className="flex bg-surface border border-overlay/10 rounded-2xl p-1 overflow-x-auto gap-1">
           {[
             { id: "dashboard", label: "Dashboard" },
+            { id: "daily", label: "🗓️ Daily & Typed Journals" },
             { id: "graph", label: "Mind Graph" },
             { id: "batch", label: "Batch & History" },
             ...(betaMode ? [
@@ -2133,6 +2153,80 @@ export default function Dashboard() {
                 )}
               </AnimatePresence>
             </div>
+          </div>
+        )}
+
+        {/* Tab Daily & Typed Journals */}
+        {activeTab === "daily" && (
+          <div className="flex flex-col gap-6">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-slate-900/80 backdrop-blur-md p-6 rounded-3xl border border-purple-900/40 shadow-xl">
+              <div>
+                <h2 className="text-xl font-extrabold text-slate-100 flex items-center gap-2">
+                  🗓️ Daily & On-The-Spot Journals
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Access your daily recaps, past-few-hours entries, and typed journals on the spot.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setIsQuickJournalOpen(true)}
+                className="px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs md:text-sm flex items-center gap-2 shadow-lg shadow-purple-900/40 transition active:scale-95 cursor-pointer shrink-0"
+              >
+                <Edit3 className="w-4 h-4" />
+                + Write Daily Journal
+              </button>
+            </div>
+
+            {/* Daily & Typed Logs Grid */}
+            {(() => {
+              const dailyLogs = logs.filter(
+                (l) =>
+                  l.audio_url === "daily_journal" ||
+                  l.audio_url === "past_hours_journal" ||
+                  l.audio_url === "text_journal" ||
+                  l.custom_tags?.some(
+                    (t) =>
+                      t.startsWith("_category:Daily Reflection") ||
+                      t.startsWith("_category:Past Hours") ||
+                      t.startsWith("_entry_type:")
+                  )
+              );
+
+              if (dailyLogs.length === 0) {
+                return (
+                  <div className="glass-panel rounded-3xl p-10 text-center space-y-4 border border-purple-900/30">
+                    <div className="w-16 h-16 mx-auto rounded-full bg-purple-500/20 text-purple-400 flex items-center justify-center text-2xl">
+                      📝
+                    </div>
+                    <h3 className="text-base font-bold text-slate-200">
+                      No Daily Journal Entries Yet
+                    </h3>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                      Start journaling by typing on the spot, recapping your past 3 hours, or recording your daily highlights!
+                    </p>
+                    <button
+                      onClick={() => setIsQuickJournalOpen(true)}
+                      className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition cursor-pointer"
+                    >
+                      Write First Entry
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                  {dailyLogs.map((log) => (
+                    <DailyJournalCard
+                      key={log.id}
+                      log={log}
+                      onOpenChat={(selectedLog) => setSelectedChatLog(selectedLog)}
+                    />
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         )}
 
@@ -2777,6 +2871,46 @@ export default function Dashboard() {
         categoriesConfig={categoriesConfig}
         tagsConfig={tagsConfig}
         onRegisterTags={registerNewCategoryAndTags}
+      />
+      {/* Floating Action Button (FAB) for accessible daily journaling */}
+      <button
+        onClick={() => setIsQuickJournalOpen(true)}
+        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-5 py-3.5 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-500 text-white font-bold text-sm shadow-2xl hover:scale-105 transition-transform duration-300 cursor-pointer border border-purple-400/40"
+        style={{
+          boxShadow: "0 10px 30px -5px rgba(147, 51, 234, 0.5)",
+        }}
+      >
+        <Edit3 className="w-5 h-5 animate-bounce" />
+        <span>Daily & Quick Journal</span>
+      </button>
+
+      {/* Quick Accessible Daily Journal Modal */}
+      <QuickJournalModal
+        isOpen={isQuickJournalOpen}
+        onClose={() => setIsQuickJournalOpen(false)}
+        onSuccess={() => fetchLogs()}
+      />
+
+      {/* Interactive AI Chat Drawer for selected entry */}
+      {selectedChatLog && (
+        <JournalAIChatDrawer
+          isOpen={!!selectedChatLog}
+          onClose={() => setSelectedChatLog(null)}
+          journalTitle={selectedChatLog.ai_title || "Journal Entry"}
+          journalText={selectedChatLog.tidied_log || selectedChatLog.raw_transcript}
+          reflections={selectedChatLog.reflections}
+          journalId={selectedChatLog.id}
+          provider={chatProvider}
+          apiKey={chatApiKey}
+          model={chatModel}
+        />
+      )}
+
+      {/* Database & Storage Usage Modal */}
+      <DatabaseUsageModal
+        isOpen={isDbUsageModalOpen}
+        onClose={() => setIsDbUsageModalOpen(false)}
+        onMigrationComplete={() => fetchLogs()}
       />
     </div>
   );

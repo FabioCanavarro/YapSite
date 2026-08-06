@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   ArrowLeft, Volume2, VolumeX, FileText, Check, 
-  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download
+  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download, MessageSquare
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import EchoCard from "@/components/EchoCard";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
+import JournalAIChatDrawer from "@/components/JournalAIChatDrawer";
 
 interface Log {
   id: string;
@@ -70,6 +71,7 @@ export default function JournalDetail({ params }: PageProps) {
   const [isSavingReflections, setIsSavingReflections] = useState(false);
   const [isEditingReflections, setIsEditingReflections] = useState(false);
   const [audioPlaybackUrl, setAudioPlaybackUrl] = useState("");
+  const [isChatDrawerOpen, setIsChatDrawerOpen] = useState(false);
 
   // Edit details states
   const [isEditingDetails, setIsEditingDetails] = useState(false);
@@ -924,6 +926,14 @@ ${reflections || "*No reflections added yet.*"}
           
           <div className="flex items-center gap-2">
             <button
+              onClick={() => setIsChatDrawerOpen(true)}
+              className="px-3.5 py-1.5 rounded-full bg-purple-950/80 hover:bg-purple-900 border border-purple-500/40 text-xs font-semibold text-purple-200 flex items-center gap-1.5 transition-transform duration-200 active:scale-95 shadow-md cursor-pointer"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-purple-400" />
+              <span>AI Chat</span>
+            </button>
+
+            <button
               onClick={() => setIsReanalyzePopupOpen(true)}
               disabled={isReanalyzing}
               className="px-3.5 py-1.5 rounded-full bg-surface hover:bg-surface-hover border border-overlay/10 text-xs font-semibold text-text flex items-center gap-1.5 transition-transform duration-200 active:scale-95 shadow-md cursor-pointer"
@@ -1437,6 +1447,19 @@ ${reflections || "*No reflections added yet.*"}
           tags={log.ai_tags}
         />
       </main>
+
+      {/* AI Chat Drawer */}
+      <JournalAIChatDrawer
+        isOpen={isChatDrawerOpen}
+        onClose={() => setIsChatDrawerOpen(false)}
+        journalTitle={log.ai_title || "Journal Entry"}
+        journalText={log.tidied_log || log.raw_transcript}
+        reflections={reflections}
+        journalId={log.id}
+        provider={chatProvider}
+        apiKey={chatApiKey}
+        model={chatModel}
+      />
     </div>
   );
 }

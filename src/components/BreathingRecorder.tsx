@@ -242,23 +242,53 @@ export default function BreathingRecorder({
     const fileTimestamp = lastModified || Date.now();
     const fileName = `${user.id}/${fileTimestamp}-${Math.random().toString(36).substring(7)}.${extension}`;
 
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("audio_journals")
-      .upload(fileName, blob, {
-        contentType: mimeType,
-        duplex: "half",
+    let audioUrl = "";
+    let storageProviderTag = "_storage:hackclub_cdn";
+
+    try {
+      const cdnFormData = new FormData();
+      cdnFormData.append("file", blob, `audio-${fileTimestamp}.${extension}`);
+
+      const cdnRes = await fetch("/api/cdn-upload", {
+        method: "POST",
+        body: cdnFormData,
       });
 
-    if (uploadError) {
-      throw new Error(`Upload failed: ${uploadError.message}`);
+      if (cdnRes.ok) {
+        const cdnJson = await cdnRes.json();
+        if (cdnJson.url) {
+          audioUrl = cdnJson.url;
+          if (cdnJson.provider === "supabase_storage") {
+            storageProviderTag = "_storage:supabase";
+          }
+        }
+      }
+    } catch (cdnErr) {
+      console.warn("CDN Upload API error, executing fallback:", cdnErr);
     }
 
-    const { data: urlData } = supabase.storage
-      .from("audio_journals")
-      .getPublicUrl(fileName);
+    if (!audioUrl) {
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("audio_journals")
+        .upload(fileName, blob, {
+          contentType: mimeType,
+          duplex: "half",
+        });
+
+      if (uploadError) {
+        throw new Error(`Upload failed: ${uploadError.message}`);
+      }
+
+      const { data: urlData } = supabase.storage
+        .from("audio_journals")
+        .getPublicUrl(fileName);
+
+      audioUrl = urlData.publicUrl;
+      storageProviderTag = "_storage:supabase";
+    }
 
     const sizeTag = `_filesize:${size}`;
-    const customTags = [sizeTag];
+    const customTags = [sizeTag, storageProviderTag];
 
     const categories = categoriesConfig;
     const tags = tagsConfig;
@@ -267,7 +297,7 @@ export default function BreathingRecorder({
       .from("journal_logs")
       .insert({
         user_id: user.id,
-        audio_url: urlData.publicUrl,
+        audio_url: audioUrl,
         processing_status: "pending",
         ai_title: `Analyzing "${fileNameOrig.substring(0, 30)}"...`,
         ai_mood_color: "#313244",
