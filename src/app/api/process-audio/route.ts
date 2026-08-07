@@ -77,11 +77,13 @@ export async function POST(request: NextRequest) {
         headers["Authorization"] = `Bearer ${anonKey}`;
       }
 
-      // Replace public storage URL with authenticated endpoint to bypass private bucket restrictions
-      const authenticatedUrl = audioUrl.replace("/object/public/", "/object/authenticated/");
-      const fileResponse = await fetch(authenticatedUrl, { headers });
+      let fileResponse = await fetch(audioUrl);
+      if (!fileResponse.ok && audioUrl.includes("supabase")) {
+        const authenticatedUrl = audioUrl.replace("/object/public/", "/object/authenticated/");
+        fileResponse = await fetch(authenticatedUrl, { headers });
+      }
       if (!fileResponse.ok) {
-        throw new Error(`Storage URL download returned status ${fileResponse.status}`);
+        throw new Error(`Audio URL download returned status ${fileResponse.status}`);
       }
       
       const contentType = fileResponse.headers.get("content-type");

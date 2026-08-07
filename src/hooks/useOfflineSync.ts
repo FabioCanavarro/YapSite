@@ -65,30 +65,52 @@ export function useOfflineSync(onSyncComplete?: () => void) {
           const extension = entry.mimeType.split("/")[1] || "wav";
           const fileName = `${user.id}/sync-${Date.now()}-${entry.id}.${extension}`;
 
-          // 1. Upload audio to Supabase Storage
-          const { error: uploadError } = await supabase.storage
-            .from("audio_journals")
-            .upload(fileName, entry.blob, {
-              contentType: entry.mimeType,
-              duplex: "half",
+          let audioUrl = "";
+          try {
+            const cdnFormData = new FormData();
+            cdnFormData.append("file", entry.blob, `sync-${Date.now()}.${extension}`);
+
+            const cdnRes = await fetch("/api/cdn-upload", {
+              method: "POST",
+              body: cdnFormData,
             });
 
-          if (uploadError) {
-            console.error("Offline upload error:", uploadError);
-            continue; // Skip this one, try the next
+            if (cdnRes.ok) {
+              const cdnJson = await cdnRes.json();
+              if (cdnJson.url) {
+                audioUrl = cdnJson.url;
+              }
+            }
+          } catch (cdnErr) {
+            console.warn("CDN upload failed during offline sync, falling back:", cdnErr);
           }
 
-          // 2. Get Public URL
-          const { data: urlData } = supabase.storage
-            .from("audio_journals")
-            .getPublicUrl(fileName);
+          if (!audioUrl) {
+            const { error: uploadError } = await supabase.storage
+              .from("audio_journals")
+              .upload(fileName, entry.blob, {
+                contentType: entry.mimeType,
+                duplex: "half",
+              });
+
+            if (uploadError) {
+              console.error("Offline upload error:", uploadError);
+              continue;
+            }
+
+            const { data: urlData } = supabase.storage
+              .from("audio_journals")
+              .getPublicUrl(fileName);
+
+            audioUrl = urlData.publicUrl;
+          }
 
           // 3. Create Pending database record
           const { data: dbData, error: dbError } = await supabase
             .from("journal_logs")
             .insert({
               user_id: user.id,
-              audio_url: urlData.publicUrl,
+              audio_url: audioUrl,
               processing_status: "pending",
               ai_title: "Offline Synced Entry",
               ai_mood_color: "#313244",

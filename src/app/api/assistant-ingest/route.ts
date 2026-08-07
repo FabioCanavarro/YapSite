@@ -53,30 +53,58 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
     const mimeType = file.type || "audio/wav";
 
-    // 3. Upload to Supabase Storage
+    // 3. Upload to Hack Club CDN (v4 API) with Supabase Fallback
     const timestamp = Date.now();
     const randomStr = Math.random().toString(36).substring(7);
     const fileExtension = file.name.split(".").pop() || "wav";
     const fileName = `${userId}/${timestamp}-${randomStr}.${fileExtension}`;
 
-    const { data: uploadData, error: uploadError } = await adminSupabase.storage
-      .from("audio_journals")
-      .upload(fileName, buffer, {
-        contentType: mimeType,
-        duplex: "half",
+    let audioUrl = "";
+    try {
+      const cdnFormData = new FormData();
+      const blob = new Blob([buffer], { type: mimeType });
+      cdnFormData.append("file", blob, `ingest-${timestamp}.${fileExtension}`);
+
+      const cdnHeaders: HeadersInit = {};
+      const cdnKey = process.env.HACK_CLUB_CDN_API_KEY || process.env.HACK_CLUB_API_KEY;
+      if (cdnKey && !cdnKey.includes("your-")) {
+        cdnHeaders["Authorization"] = `Bearer ${cdnKey}`;
+      }
+
+      const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
+        method: "POST",
+        headers: cdnHeaders,
+        body: cdnFormData,
       });
 
-    if (uploadError) {
-      console.error("Storage upload error:", uploadError);
-      return NextResponse.json({ error: `Storage upload failed: ${uploadError.message}` }, { status: 500 });
+      if (cdnRes.ok) {
+        const cdnJson = await cdnRes.json();
+        audioUrl = cdnJson.url || "";
+        console.log(`[Assistant Ingest] Uploaded to Hack Club CDN v4: ${audioUrl}`);
+      }
+    } catch (cdnErr) {
+      console.warn("[Assistant Ingest] CDN upload failed, executing fallback:", cdnErr);
     }
 
-    // 4. Retrieve Public/Signed URL
-    const { data: urlData } = adminSupabase.storage
-      .from("audio_journals")
-      .getPublicUrl(fileName);
+    if (!audioUrl) {
+      const { data: uploadData, error: uploadError } = await adminSupabase.storage
+        .from("audio_journals")
+        .upload(fileName, buffer, {
+          contentType: mimeType,
+          duplex: "half",
+        });
 
-    const audioUrl = urlData.publicUrl;
+      if (uploadError) {
+        console.error("Storage upload error:", uploadError);
+        return NextResponse.json({ error: `Storage upload failed: ${uploadError.message}` }, { status: 500 });
+      }
+
+      const { data: urlData } = adminSupabase.storage
+        .from("audio_journals")
+        .getPublicUrl(fileName);
+
+      audioUrl = urlData.publicUrl;
+    }
 
     // 5. Create Pending Database Row
     const { data: dbData, error: dbError } = await adminSupabase
