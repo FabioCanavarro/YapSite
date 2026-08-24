@@ -1,6 +1,6 @@
 # YapSite — AI-Powered Voice & Text Journal
 
-> **Note**: YapSite is an AI-assisted side project created to yap and journal thoughts.
+> **Note**: YapSite is an AI-assisted side project.
 
 YapSite is a voice and text journaling platform. Speak or type your raw thoughts, and YapSite automatically transcribes, cleans up grammar, categorizes, tracks mood dynamics, builds a persistent personal Knowledge Base, and visualizes connections through interactive Mind Graphs.
 
