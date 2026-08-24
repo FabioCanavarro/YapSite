@@ -8,9 +8,7 @@ const withPWA = withPWAInit({
 });
 
 const nextConfig: NextConfig = {
-  turbopack: {
-    root: __dirname,
-  },
+  turbopack: {},
 };
 
 export default withPWA(nextConfig);
