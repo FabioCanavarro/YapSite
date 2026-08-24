@@ -1,28 +1,30 @@
-# 🎙️ YapSite — AI-Powered Voice & Text Journal
+# YapSite — AI-Powered Voice & Text Journal
 
-> **YapSite** is an intelligent, empathetic voice and text journaling platform. Speak or type your raw thoughts, and YapSite automatically transcribes, cleans up grammar, categorizes, tracks mood dynamics, builds a persistent personal Knowledge Base, and visualizes connections through interactive Mind Graphs.
+> **Note**: YapSite is an AI-assisted side project created to yap and journal thoughts.
+
+YapSite is a voice and text journaling platform. Speak or type your raw thoughts, and YapSite automatically transcribes, cleans up grammar, categorizes, tracks mood dynamics, builds a persistent personal Knowledge Base, and visualizes connections through interactive Mind Graphs.
 
 ---
 
-## 🌟 Key Features
+## Key Features
 
-- 🎙️ **Voice & Text Journaling**: Record audio directly in the browser with client-side compression and server-side pure JS WAV/MP3 chunking for large files.
-- ⚡ **Multi-Tier AI Fallback Engine**:
+- **Voice & Text Journaling**: Record audio directly in the browser with client-side compression and server-side pure JS WAV/MP3 chunking for large files.
+- **Multi-Tier AI Fallback Engine**:
   - **Transcription**: Powered by Groq Whisper (`whisper-large-v3`).
   - **Semantic Analysis**: Multi-tier fallback architecture:
     1. **Primary**: Hack Club AI (`gpt-4o-mini`)
     2. **Secondary**: Groq (`llama-3.3-70b-versatile`)
     3. **Free Fallback**: OpenRouter Free Tier (`google/gemini-2.0-flash-lite`, `meta-llama/llama-3.3-70b`, `deepseek/deepseek-r1`, `qwen-2.5-coder`, `mistral-7b`)
-- 🧠 **Personal Knowledge Base**: Automatically extracts and compiles long-term facts, strengths, growth areas, relations, and scenarios into a contextual AI knowledge base.
-- 🕸️ **Interactive Mind Graph**: Visually map connections between journal themes, emotional moods, categories, and entries.
-- ☁️ **Hack Club CDN Storage**: Voice recordings are offloaded to Hack Club CDN v4 (`/api/v4/upload`) to preserve database storage, complete with live quota monitoring.
-- ⏰ **Automatic & Periodic Retries**: 12-hour client background retries and daily Vercel Cron (`0 0 * * *`) at `/api/cron/retry-pending` to automatically recover entries from temporary AI downtime or credit exhaustion.
-- 🎨 **Dynamic GSAP Themes**: Animated color palette interpolation featuring Mocha, Macchiato, Frappé, Latte Light, Neon Cyberpunk, and Forest Emerald themes.
-- 📱 **PWA & Offline Sync**: Full Progressive Web App support with offline queueing and background sync when connection resumes.
+- **Personal Knowledge Base**: Automatically extracts and compiles long-term facts, strengths, growth areas, relations, and scenarios into a contextual AI knowledge base.
+- **Interactive Mind Graph**: Visually map connections between journal themes, emotional moods, categories, and entries.
+- **Hack Club CDN Storage**: Voice recordings are offloaded to Hack Club CDN v4 (`/api/v4/upload`) to preserve database storage, complete with live quota monitoring.
+- **Automatic & Periodic Retries**: 12-hour client background retries and daily Vercel Cron (`0 0 * * *`) at `/api/cron/retry-pending` to automatically recover entries from temporary AI downtime or credit exhaustion.
+- **Dynamic GSAP Themes**: Animated color palette interpolation featuring Mocha, Macchiato, Frappé, Latte Light, Neon Cyberpunk, and Forest Emerald themes.
+- **PWA & Offline Sync**: Full Progressive Web App support with offline queueing and background sync when connection resumes.
 
 ---
 
-## 🛠️ Technology Stack
+## Technology Stack
 
 - **Framework**: [Next.js 16](https://nextjs.org/) (App Router, Turbopack) & [React 19](https://react.dev/)
 - **Styling**: Vanilla CSS & [Tailwind CSS v4](https://tailwindcss.com/)
@@ -34,7 +36,7 @@
 
 ---
 
-## 🔑 Environment Variables
+## Environment Variables
 
 Copy `.env.example` to `.env.local` and configure your API keys:
 
@@ -57,7 +59,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key-here
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 1. **Clone the repository**:
    ```bash
@@ -84,7 +86,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key-here
 
 ---
 
-## ⚙️ Cron Jobs & Automation
+## Cron Jobs & Automation
 
 YapSite includes a scheduled Vercel Cron Job configured in `vercel.json`:
 - **Path**: `/api/cron/retry-pending`
@@ -93,6 +95,6 @@ YapSite includes a scheduled Vercel Cron Job configured in `vercel.json`:
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the MIT License. See `LICENSE` for details.
