@@ -95,80 +95,47 @@ async function runMigration() {
       const cdnKey = process.env.HACK_CLUB_CDN_API_KEY || process.env.HACK_CLUB_API_KEY;
       const authHeaders: HeadersInit = cdnKey && !cdnKey.includes("your-") ? { Authorization: `Bearer ${cdnKey}` } : {};
 
-      // 1. Try Hack Club CDN v4 upload_from_url
-      try {
-        const urlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
-          method: "POST",
-          headers: {
-            ...authHeaders,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ url: originalUrl }),
-        });
-
-        if (urlRes.ok) {
-          const urlData = await urlRes.json();
-          if (urlData.url) {
-            newCdnUrl = urlData.url;
-            fileSize = urlData.size || 0;
-            console.log(`   ⚡ Direct URL migration via Hack Club CDN v4: ${newCdnUrl}`);
-          }
-        }
-      } catch (e) {}
-
-      // 2. Fallback to direct stream upload if URL migration fails
-      if (!newCdnUrl) {
-        let audioRes = await fetch(originalUrl);
-        if (!audioRes.ok) {
-          audioRes = await fetch(originalUrl, { headers });
-        }
-
-        if (!audioRes.ok) {
-          if (audioRes.status === 400 || audioRes.status === 404) {
-            console.log(`   ℹ️ Storage object already deleted from Supabase (Status ${audioRes.status}). Converting entry to text journal...`);
-            const customTags = log.custom_tags || [];
-            if (!customTags.includes("_storage:cleared")) customTags.push("_storage:cleared");
-
-            await fetch(`${supabaseUrl}/rest/v1/journal_logs?id=eq.${log.id}`, {
-              method: "PATCH",
-              headers,
-              body: JSON.stringify({
-                audio_url: "daily_journal",
-                custom_tags: customTags,
-              }),
-            });
-            migrated++;
-            continue;
-          }
-          throw new Error(`Failed to download from Supabase Storage: status ${audioRes.status}`);
-        }
-
-        const audioBlob = await audioRes.blob();
-        fileSize = audioBlob.size;
-
-        const formData = new FormData();
-        formData.append("file", audioBlob, fileName);
-
-        const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
-          method: "POST",
-          headers: authHeaders,
-          body: formData,
-        });
-
-        if (!cdnRes.ok) {
-          throw new Error(`Hack Club CDN status ${cdnRes.status}`);
-        }
-
-        const cdnData = await cdnRes.json();
-        newCdnUrl = cdnData.url || "";
+      // 1. Download file from Supabase Storage (trying public URL first, then authenticated URL with headers)
+      let audioRes = await fetch(originalUrl);
+      if (!audioRes.ok && originalUrl.includes("supabase")) {
+        const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
+        audioRes = await fetch(authenticatedUrl, { headers });
       }
+
+      if (!audioRes.ok) {
+        if (audioRes.status === 404) {
+          console.log(`   ℹ️ Storage object missing in Supabase (Status 404). Skipping.`);
+          failed++;
+          continue;
+        }
+        throw new Error(`Failed to download from Supabase Storage: status ${audioRes.status}`);
+      }
+
+      const audioBlob = await audioRes.blob();
+      fileSize = audioBlob.size;
+
+      const formData = new FormData();
+      formData.append("file", audioBlob, fileName);
+
+      const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
+        method: "POST",
+        headers: authHeaders,
+        body: formData,
+      });
+
+      if (!cdnRes.ok) {
+        throw new Error(`Hack Club CDN status ${cdnRes.status}`);
+      }
+
+      const cdnData = await cdnRes.json();
+      newCdnUrl = cdnData.url || "";
 
       if (!newCdnUrl) {
         throw new Error("Hack Club CDN response did not contain a valid URL");
       }
 
       // Update DB record via direct REST call
-      const customTags = log.custom_tags || [];
+      const customTags = (log.custom_tags || []).filter((t: string) => t !== "_storage:cleared");
       if (!customTags.includes("_storage:hackclub_cdn")) {
         customTags.push("_storage:hackclub_cdn");
       }

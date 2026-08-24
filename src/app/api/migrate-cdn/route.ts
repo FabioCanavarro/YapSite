@@ -74,81 +74,62 @@ export async function POST(request: NextRequest) {
         const cdnKey = process.env.HACK_CLUB_CDN_API_KEY || process.env.HACK_CLUB_API_KEY;
         const authHeaders: HeadersInit = cdnKey && !cdnKey.includes("your-") ? { Authorization: `Bearer ${cdnKey}` } : {};
 
-        // 1. Try Hack Club CDN v4 upload_from_url first
-        try {
-          const urlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
-            method: "POST",
-            headers: {
-              ...authHeaders,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ url: originalUrl }),
-          });
-
-          if (urlRes.ok) {
-            const urlData = await urlRes.json();
-            if (urlData.url) {
-              newCdnUrl = urlData.url;
-              fileSize = urlData.size || 0;
-              console.log(`[CDN Migration] Migrated via v4 upload_from_url: ${newCdnUrl}`);
-            }
-          }
-        } catch (urlErr) {
-          console.warn("[CDN Migration] upload_from_url failed, falling back to direct upload:", urlErr);
+        // 1. Download file from Supabase Storage (trying public URL first, then authenticated URL with headers)
+        let audioRes = await fetch(originalUrl);
+        if (!audioRes.ok && originalUrl.includes("supabase")) {
+          const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
+          audioRes = await fetch(authenticatedUrl, { headers });
         }
 
-        // 2. Fallback to direct file upload if upload_from_url failed
-        if (!newCdnUrl) {
-          let audioRes = await fetch(originalUrl);
-          if (!audioRes.ok) {
-            audioRes = await fetch(originalUrl, { headers });
+        if (!audioRes.ok) {
+          if (audioRes.status === 404) {
+            console.warn(`[CDN Migration] Storage object missing for log ${log.id} (Status 404). Marking as missing.`);
+            const customTags = (log.custom_tags || []).filter((t: string) => t !== "_storage:cleared");
+            if (!customTags.includes("_storage:missing")) customTags.push("_storage:missing");
+
+            await adminSupabase
+              .from("journal_logs")
+              .update({ custom_tags: customTags })
+              .eq("id", log.id);
+
+            failedCount++;
+            migrationLogResults.push({
+              id: log.id,
+              title: log.ai_title || "Untitled",
+              status: "failed",
+              error: "Audio file not found in storage (404)",
+            });
+            continue;
           }
-
-          if (!audioRes.ok) {
-            if (audioRes.status === 400 || audioRes.status === 404) {
-              const customTags = log.custom_tags || [];
-              if (!customTags.includes("_storage:cleared")) customTags.push("_storage:cleared");
-
-              await adminSupabase
-                .from("journal_logs")
-                .update({
-                  audio_url: "daily_journal",
-                  custom_tags: customTags,
-                })
-                .eq("id", log.id);
-
-              migratedCount++;
-              continue;
-            }
-            throw new Error(`Failed to download from Supabase Storage: ${audioRes.status}`);
-          }
-
-          const audioBlob = await audioRes.blob();
-          fileSize = audioBlob.size;
-
-          const cdnFormData = new FormData();
-          cdnFormData.append("file", audioBlob, fileName);
-
-          const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
-            method: "POST",
-            headers: authHeaders,
-            body: cdnFormData,
-          });
-
-          if (!cdnRes.ok) {
-            throw new Error(`Hack Club CDN upload returned status ${cdnRes.status}`);
-          }
-
-          const cdnData = await cdnRes.json();
-          newCdnUrl = cdnData.url || "";
+          throw new Error(`Failed to download audio from Supabase Storage: status ${audioRes.status}`);
         }
+
+        const audioBlob = await audioRes.blob();
+        fileSize = audioBlob.size;
+
+        // 2. Upload file to Hack Club CDN v4
+        const cdnFormData = new FormData();
+        cdnFormData.append("file", audioBlob, fileName);
+
+        const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
+          method: "POST",
+          headers: authHeaders,
+          body: cdnFormData,
+        });
+
+        if (!cdnRes.ok) {
+          throw new Error(`Hack Club CDN upload returned status ${cdnRes.status}`);
+        }
+
+        const cdnData = await cdnRes.json();
+        newCdnUrl = cdnData.url || "";
 
         if (!newCdnUrl) {
           throw new Error("Hack Club CDN did not return a valid URL");
         }
 
         // Update Database record
-        const customTags = log.custom_tags || [];
+        const customTags = (log.custom_tags || []).filter((t: string) => t !== "_storage:cleared");
         if (!customTags.includes("_storage:hackclub_cdn")) {
           customTags.push("_storage:hackclub_cdn");
         }
