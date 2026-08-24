@@ -2,7 +2,7 @@
 
 import { useRef, useEffect } from "react";
 import { X, Palette, Sparkles, Check } from "lucide-react";
-import { animateThemeChange, animateModalOpen, PRESET_THEMES, ThemeColors } from "@/utils/gsapAnimations";
+import { animateThemeChange, animateModalEnter, PRESET_THEMES, ThemeColors } from "@/utils/gsapAnimations";
 
 interface ThemeSwitcherModalProps {
   isOpen: boolean;
@@ -21,7 +21,7 @@ export default function ThemeSwitcherModal({
 
   useEffect(() => {
     if (isOpen && modalRef.current) {
-      animateModalOpen(modalRef.current);
+      animateModalEnter(modalRef.current);
     }
   }, [isOpen]);
 
