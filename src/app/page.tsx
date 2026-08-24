@@ -1446,10 +1446,9 @@ export default function Dashboard() {
             <button
               onClick={() => setIsDbUsageModalOpen(true)}
               title="Database & Storage Usage"
-              className="px-3 py-1.5 rounded-xl bg-sky-950/70 hover:bg-sky-900/90 border border-sky-500/40 text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-transform duration-200 active:scale-95 cursor-pointer shadow-sm"
+              className="p-2 rounded-xl bg-surface hover:text-sky-400 text-text transition-colors duration-200 border border-overlay/5 cursor-pointer"
             >
-              <Database className="w-3.5 h-3.5 text-sky-400 animate-pulse" />
-              <span className="hidden sm:inline">DB Usage</span>
+              <Database className="w-4 h-4 text-sky-400" />
             </button>
 
             {/* Settings Button */}
@@ -2947,13 +2946,11 @@ export default function Dashboard() {
       {/* Floating Action Button (FAB) for accessible daily journaling */}
       <button
         onClick={() => setIsQuickJournalOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-5 py-3.5 rounded-full bg-gradient-to-r from-purple-600 via-indigo-600 to-sky-500 text-white font-bold text-sm shadow-2xl hover:scale-105 transition-transform duration-300 cursor-pointer border border-purple-400/40"
-        style={{
-          boxShadow: "0 10px 30px -5px rgba(147, 51, 234, 0.5)",
-        }}
+        title="Open Daily & Quick Journal"
+        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-surface/90 hover:bg-surface backdrop-blur-md text-hype font-bold text-xs shadow-xl border border-hype/30 hover:scale-105 transition-all duration-200 cursor-pointer"
       >
-        <Edit3 className="w-5 h-5 animate-bounce" />
-        <span>Daily & Quick Journal</span>
+        <Edit3 className="w-4 h-4 text-hype" />
+        <span className="hidden md:inline text-text">Quick Journal</span>
       </button>
 
       {/* Quick Accessible Daily Journal Modal */}
