@@ -7,7 +7,8 @@ import {
   Mic, Search, LogOut, Loader2, Sparkles, Filter, 
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
   Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
-  Plus, CheckSquare, Square, Play, History, Edit2, Download, MessageSquare, Clock, Edit3, Database
+  Plus, CheckSquare, Square, Play, History, Edit2, Download, MessageSquare, Clock, Edit3, Database,
+  RefreshCw, AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -222,6 +223,43 @@ export default function Dashboard() {
   const [historyLogs, setHistoryLogs] = useState<any[]>([]);
   const [isBatchReanalyzePopupOpen, setIsBatchReanalyzePopupOpen] = useState(false);
   const [selectedBatchProfileName, setSelectedBatchProfileName] = useState("");
+  const [retryingLogIds, setRetryingLogIds] = useState<string[]>([]);
+
+  const retrySingleLog = async (logId: string) => {
+    if (retryingLogIds.includes(logId)) return;
+    setRetryingLogIds((prev) => [...prev, logId]);
+    toast.loading("Re-analyzing audio with AI fallbacks...", { id: `retry-${logId}` });
+
+    try {
+      const res = await fetch("/api/process-audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          logId,
+          removeFillerWords,
+          enableSwearWords,
+          customPrompt,
+          language,
+          customMoods,
+          categories: categoriesConfig,
+          tags: tagsConfig,
+        }),
+      });
+
+      if (res.ok) {
+        const processed = await res.json();
+        toast.success(`Analysis complete: "${processed.ai_title || "Entry updated"}"`, { id: `retry-${logId}` });
+        fetchLogs();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        toast.error(`Re-analysis failed: ${errJson.error || `HTTP ${res.status}`}`, { id: `retry-${logId}` });
+      }
+    } catch (err: any) {
+      toast.error(`Re-analysis error: ${err.message || String(err)}`, { id: `retry-${logId}` });
+    } finally {
+      setRetryingLogIds((prev) => prev.filter((id) => id !== logId));
+    }
+  };
 
   // Initialize offline sync hook
   const { isOnline } = useOfflineSync(() => fetchLogs());
@@ -916,20 +954,30 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  // Automatically process pending logs silently in the background when logs update
+  // Automatically process pending/failed logs silently in the background when logs update or 12-hour timer elapses
   useEffect(() => {
     if (logs.length > 0 && !isProcessingPending) {
-      processPendingLogs();
+      const lastRetry = typeof window !== "undefined" ? localStorage.getItem("yapsite_last_auto_retry_time") : null;
+      const now = Date.now();
+      const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+      const hasStuckLogs = logs.some((l) => l.processing_status === "pending" || l.processing_status === "failed");
+
+      if (hasStuckLogs || !lastRetry || now - parseInt(lastRetry, 10) >= TWELVE_HOURS) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("yapsite_last_auto_retry_time", now.toString());
+        }
+        processPendingLogs();
+      }
     }
   }, [logs, isProcessingPending]);
 
-  // Silent background processing of pending entries on load
+  // Silent background processing of pending or failed entries
   const processPendingLogs = async () => {
-    const pending = logs.filter((log) => log.processing_status === "pending");
+    const pending = logs.filter((log) => log.processing_status === "pending" || log.processing_status === "failed");
     if (pending.length === 0) return;
 
     setIsProcessingPending(true);
-    toast.info(`Processing ${pending.length} pending entry in background...`);
+    toast.info(`Processing ${pending.length} pending/stuck entry in background...`);
 
     for (const log of pending) {
       try {
@@ -2077,8 +2125,15 @@ export default function Dashboard() {
                                 </span>
                               )}
                               {log.processing_status === "pending" && (
-                                <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse shrink-0">
+                                <span className="text-[9px] bg-hype/20 text-hype px-1.5 py-0.5 rounded font-mono animate-pulse shrink-0 flex items-center gap-1">
+                                  <RefreshCw className="w-2.5 h-2.5 animate-spin" />
                                   Processing...
+                                </span>
+                              )}
+                              {log.processing_status === "failed" && (
+                                <span className="text-[9px] bg-stressed/20 text-stressed px-1.5 py-0.5 rounded font-mono shrink-0 flex items-center gap-1">
+                                  <AlertCircle className="w-2.5 h-2.5" />
+                                  Analysis Failed
                                 </span>
                               )}
                             </div>
@@ -2113,12 +2168,29 @@ export default function Dashboard() {
                             </div>
                           )}
 
-                          <button
-                            onClick={(e) => deleteEntry(log.id, e)}
-                            className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer shrink-0 z-20"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-1.5 shrink-0 z-20">
+                            {(log.processing_status === "pending" || log.processing_status === "failed") && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  retrySingleLog(log.id);
+                                }}
+                                disabled={retryingLogIds.includes(log.id)}
+                                title="Re-analyze AI using OpenRouter / Groq fallbacks"
+                                className="px-2 py-1 rounded-lg bg-hype/10 text-hype hover:bg-hype/20 border border-hype/20 transition-colors cursor-pointer flex items-center gap-1 text-[10px] font-semibold"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${retryingLogIds.includes(log.id) ? "animate-spin" : ""}`} />
+                                <span>{retryingLogIds.includes(log.id) ? "Analyzing..." : "Retry AI"}</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={(e) => deleteEntry(log.id, e)}
+                              className="p-1.5 rounded-lg hover:bg-crust hover:text-stressed text-overlay transition-colors cursor-pointer shrink-0 z-20"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         <p className="text-xs text-text/80 line-clamp-2 leading-relaxed">

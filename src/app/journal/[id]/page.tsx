@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { 
   ArrowLeft, Volume2, VolumeX, FileText, Check, 
-  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download, MessageSquare
+  Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download, MessageSquare,
+  RefreshCw, AlertCircle
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -113,6 +114,37 @@ export default function JournalDetail({ params }: PageProps) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [isReanalyzePopupOpen, setIsReanalyzePopupOpen] = useState(false);
   const [selectedProfileName, setSelectedProfileName] = useState("");
+
+  const handleRetryAnalysis = async () => {
+    if (!log || isReanalyzing) return;
+    setIsReanalyzing(true);
+    toast.loading("Re-analyzing audio with AI fallbacks...", { id: `retry-${log.id}` });
+
+    try {
+      const res = await fetch("/api/process-audio", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ logId: log.id }),
+      });
+
+      if (res.ok) {
+        const processed = await res.json();
+        setLog((prev) => (prev ? { ...prev, ...processed } : processed));
+        setEditedTidiedText(processed.tidied_log || "");
+        setEditedTitle(processed.ai_title || "");
+        setEditedTags(processed.ai_tags?.join(", ") || "");
+        setEditedMoodColor(processed.ai_mood_color || "#74c7ec");
+        toast.success(`Analysis complete: "${processed.ai_title || "Entry updated"}"`, { id: `retry-${log.id}` });
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        toast.error(`Re-analysis failed: ${errJson.error || `HTTP ${res.status}`}`, { id: `retry-${log.id}` });
+      }
+    } catch (err: any) {
+      toast.error(`Re-analysis error: ${err.message || String(err)}`, { id: `retry-${log.id}` });
+    } finally {
+      setIsReanalyzing(false);
+    }
+  };
 
   // Load profiles, categories & moods from database
   useEffect(() => {
@@ -1151,6 +1183,30 @@ ${reflections || "*No reflections added yet.*"}
             </div>
           ) : (
             <>
+              {(log.processing_status === "pending" || log.processing_status === "failed") && (
+                <div className="w-full mb-4 p-4 rounded-2xl bg-stressed/15 border border-stressed/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-text relative z-10">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-5 h-5 text-stressed shrink-0" />
+                    <div>
+                      <h4 className="text-xs font-bold text-stressed uppercase tracking-wider">
+                        {log.processing_status === "pending" ? "Analysis Pending" : "Analysis Failed"}
+                      </h4>
+                      <p className="text-xs text-text/80">
+                        The AI provider encountered an issue while processing this entry. Click to retry using OpenRouter / Groq fallback models.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleRetryAnalysis}
+                    disabled={isReanalyzing}
+                    className="px-3.5 py-1.5 rounded-xl bg-hype text-mantle font-bold text-xs hover:bg-hype/90 transition-colors shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isReanalyzing ? "animate-spin" : ""}`} />
+                    <span>{isReanalyzing ? "Re-analyzing..." : "Retry AI Analysis"}</span>
+                  </button>
+                </div>
+              )}
+
               <div className="flex justify-between items-start gap-4 mb-2 relative z-10">
                 <span className="text-[10px] text-overlay font-light uppercase tracking-wider flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5" />

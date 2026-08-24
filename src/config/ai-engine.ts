@@ -485,16 +485,24 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
         console.log(`[AI Engine] [Vercel Logger] Groq Llama completion finished successfully in ${Date.now() - llmStart}ms.`);
       } catch (err: any) {
         console.error("[AI Engine] [Vercel Logger] Groq Llama fallback failed:", err);
-        throw new Error(`AI analysis failed (both Hack Club and Groq Llama fallback failed): ${err.message || err}`);
       }
     }
 
     if (!responseText) {
-      throw new Error("No response text returned from AI completion");
+      console.log("[AI Engine] [Vercel Logger] Hack Club AI and Groq failed. Attempting OpenRouter free models fallback...");
+      responseText = await this.tryOpenRouterFallback(
+        systemPrompt,
+        `Here is the raw transcript to analyze:\n\n${rawTranscript}`
+      );
+    }
+
+    if (!responseText) {
+      throw new Error("No response text returned from AI completion after trying Hack Club AI, Groq Llama, and OpenRouter free models.");
     }
 
     try {
-      const parsed = JSON.parse(responseText);
+      const cleanedJsonText = this.cleanJsonText(responseText);
+      const parsed = JSON.parse(cleanedJsonText);
       
       const result = {
         ai_title: parsed.ai_title || "Voice Journal Entry",
@@ -511,6 +519,76 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
       console.error("[AI Engine] [Vercel Logger] Failed to parse JSON response from LLM:", responseText);
       throw new Error(`JSON parsing of AI analysis failed: ${parseErr.message}`);
     }
+  }
+
+  private cleanJsonText(text: string): string {
+    const trimmed = text.trim();
+    // Strip markdown code block wrappers if present
+    const stripped = trimmed.replace(/^```json\s*/i, "").replace(/^```\s*/, "").replace(/\s*```$/, "").trim();
+    const jsonMatch = stripped.match(/\{[\s\S]*\}/);
+    return jsonMatch ? jsonMatch[0] : stripped;
+  }
+
+  private async tryOpenRouterFallback(systemPrompt: string, userContent: string): Promise<string | null> {
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY || process.env.HACK_CLUB_API_KEY || "";
+    
+    // List of top reliable free models on OpenRouter
+    const freeModels = [
+      "google/gemini-2.0-flash-lite-preview-02-05:free",
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "deepseek/deepseek-r1:free",
+      "qwen/qwen-2.5-coder-32b-instruct:free",
+      "mistralai/mistral-7b-instruct:free",
+    ];
+
+    const openRouterClient = new OpenAI({
+      apiKey: openrouterApiKey || "free-access",
+      baseURL: "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": "https://yapsite.app",
+        "X-Title": "YapSite Journal",
+      },
+    });
+
+    for (const model of freeModels) {
+      try {
+        console.log(`[AI Engine] [OpenRouter Fallback] Trying free model: ${model}...`);
+        const startTime = Date.now();
+        
+        // First try with json_object format
+        let response;
+        try {
+          response = await openRouterClient.chat.completions.create({
+            model,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userContent },
+            ],
+          });
+        } catch (formatErr) {
+          // Some OpenRouter free models do not support response_format json_object, try standard text completion
+          console.warn(`[AI Engine] [OpenRouter Fallback] Model ${model} failed with json_object format, retrying without response_format...`);
+          response = await openRouterClient.chat.completions.create({
+            model,
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userContent },
+            ],
+          });
+        }
+
+        const text = response.choices[0]?.message?.content;
+        if (text && text.trim().length > 0) {
+          console.log(`[AI Engine] [OpenRouter Fallback] ${model} completed successfully in ${Date.now() - startTime}ms.`);
+          return text;
+        }
+      } catch (modelErr: any) {
+        console.warn(`[AI Engine] [OpenRouter Fallback] ${model} failed:`, modelErr?.message || modelErr);
+      }
+    }
+
+    return null;
   }
 
   private getMockupResponse(): JournalAnalysisResult {

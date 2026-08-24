@@ -29,7 +29,7 @@ export default function ThemeSwitcherModal({
 
   const handleSelect = (key: string, theme: ThemeColors) => {
     onSelectTheme(key);
-    animateThemeChange(theme, 0.85);
+    animateThemeChange(null, theme.hype);
   };
 
   return (
@@ -59,7 +59,7 @@ export default function ThemeSwitcherModal({
         </div>
 
         <div className="grid grid-cols-1 gap-3 max-h-[60vh] overflow-y-auto pr-1">
-          {Object.entries(PRESET_THEMES).map(([key, theme]) => {
+          {Object.entries(PRESET_THEMES).map(([key, theme]: [string, ThemeColors]) => {
             const isSelected = activeThemeKey === key;
             return (
               <button

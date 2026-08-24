@@ -1,5 +1,21 @@
 import gsap from "gsap";
 
+export interface ThemeColors {
+  name: string;
+  base: string;
+  hype: string;
+  calm: string;
+}
+
+export const PRESET_THEMES: Record<string, ThemeColors> = {
+  mocha: { name: "Mocha Dark", base: "#1e1e2e", hype: "#cba6f7", calm: "#89b4fa" },
+  macchiato: { name: "Macchiato", base: "#24273a", hype: "#f5bde6", calm: "#8aadf4" },
+  frappe: { name: "Frappé", base: "#303446", hype: "#f4b8e4", calm: "#8caaee" },
+  latte: { name: "Latte Light", base: "#eff1f5", hype: "#8839ef", calm: "#1e66f5" },
+  cyberpunk: { name: "Neon Cyberpunk", base: "#0d0f18", hype: "#ff007f", calm: "#00f0ff" },
+  emerald: { name: "Forest Emerald", base: "#0f1715", hype: "#10b981", calm: "#34d399" },
+};
+
 /**
  * Smoothly morphs theme or mood accent colors across the page with GSAP
  */
@@ -124,6 +140,8 @@ export const animateModalEnter = (
     }
   );
 };
+
+export const animateModalOpen = animateModalEnter;
 
 /**
  * Smooth exit animation for modals

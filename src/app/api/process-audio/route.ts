@@ -170,6 +170,24 @@ export async function POST(request: NextRequest) {
 
   } catch (err: any) {
     console.error("Audio processing API error:", err);
+    
+    // Attempt to mark log as failed in DB if logId was provided
+    try {
+      const bodyText = await request.clone().text().catch(() => null);
+      if (bodyText) {
+        const bodyParsed = JSON.parse(bodyText);
+        if (bodyParsed.logId) {
+          const adminSupabase = createAdminClient();
+          await adminSupabase
+            .from("journal_logs")
+            .update({ processing_status: "failed" })
+            .eq("id", bodyParsed.logId);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to set processing_status to failed:", e);
+    }
+
     return NextResponse.json({ error: `Internal Server Error: ${err.message || err}` }, { status: 500 });
   } finally {
     // 8. Clean up local temp file

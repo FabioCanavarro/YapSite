@@ -128,6 +128,59 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
       }
     }
 
+    if (!responseText) {
+      // Try OpenRouter free models fallback
+      const openrouterApiKey = process.env.OPENROUTER_API_KEY || hackClubKey || "";
+      const freeModels = [
+        "google/gemini-2.0-flash-lite-preview-02-05:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "deepseek/deepseek-r1:free",
+        "qwen/qwen-2.5-coder-32b-instruct:free",
+        "mistralai/mistral-7b-instruct:free",
+      ];
+      const openRouterClient = new OpenAI({
+        apiKey: openrouterApiKey || "free-access",
+        baseURL: "https://openrouter.ai/api/v1",
+        defaultHeaders: {
+          "HTTP-Referer": "https://yapsite.app",
+          "X-Title": "YapSite Journal",
+        },
+      });
+
+      for (const model of freeModels) {
+        try {
+          console.log(`[Text Journal API] Trying OpenRouter free model fallback: ${model}...`);
+          let res;
+          try {
+            res = await openRouterClient.chat.completions.create({
+              model,
+              response_format: { type: "json_object" },
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
+              ]
+            });
+          } catch (fmtErr) {
+            res = await openRouterClient.chat.completions.create({
+              model,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
+              ]
+            });
+          }
+          const content = res.choices[0]?.message?.content;
+          if (content && content.trim().length > 0) {
+            responseText = content;
+            console.log(`[Text Journal API] OpenRouter ${model} fallback succeeded.`);
+            break;
+          }
+        } catch (orErr) {
+          console.warn(`[Text Journal API] OpenRouter model ${model} failed:`, orErr);
+        }
+      }
+    }
+
     // Fallback if APIs are not set up or offline
     let parsedResult = {
       ai_title: entryType === "daily" ? "Daily Journal Entry" : entryType === "past_hours" ? `Past Hours Recap (${timeWindow || "On-the-spot"})` : "Typed Journal Entry",
