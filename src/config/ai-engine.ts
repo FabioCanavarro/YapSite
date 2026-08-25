@@ -470,18 +470,29 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     }
 
     if (usedGroqFallback || !responseText) {
-      const groqModels = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-specdec",
-        "llama3-70b-8192",
-        "llama3-8b-8192",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it",
-        "deepseek-r1-distill-llama-70b",
-      ];
+      let activeGroqModels: string[] = [];
+      try {
+        const modelsList = await this.groqClient.models.list();
+        if (modelsList && Array.isArray(modelsList.data)) {
+          activeGroqModels = modelsList.data
+            .map((m: any) => m.id)
+            .filter((id: string) => typeof id === "string" && !id.includes("whisper") && !id.includes("vision"));
+          console.log(`[AI Engine] [Vercel Logger] Dynamically fetched ${activeGroqModels.length} active models from Groq: [${activeGroqModels.join(", ")}]`);
+        }
+      } catch (listErr) {
+        console.warn("[AI Engine] [Vercel Logger] Failed to fetch active Groq models list dynamically:", listErr);
+      }
 
-      for (const groqModel of groqModels) {
+      if (activeGroqModels.length === 0) {
+        activeGroqModels = [
+          "llama-3.3-70b-versatile",
+          "llama-3.1-8b-instant",
+          "llama-3.3-70b-instruct",
+          "llama3.3-70b",
+        ];
+      }
+
+      for (const groqModel of activeGroqModels) {
         try {
           console.log(`[AI Engine] [Vercel Logger] Performing semantic analysis using Groq fallback (${groqModel})...`);
           const llmStart = Date.now();
@@ -507,7 +518,7 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
           const content = response.choices[0]?.message?.content || null;
           if (content && content.trim().length > 0) {
             responseText = content;
-            console.log(`[AI Engine] [Vercel Logger] Groq Llama (${groqModel}) completion finished successfully in ${Date.now() - llmStart}ms.`);
+            console.log(`[AI Engine] [Vercel Logger] Groq (${groqModel}) completion finished successfully in ${Date.now() - llmStart}ms.`);
             break;
           }
         } catch (err: any) {
@@ -564,13 +575,14 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
       return null;
     }
     
-    // List of top reliable free models on OpenRouter
+    // List of top reliable free models on OpenRouter (including openrouter/free auto router)
     const freeModels = [
-      "google/gemini-2.0-flash-lite-preview-02-05:free",
-      "meta-llama/llama-3.3-70b-instruct:free",
-      "deepseek/deepseek-r1:free",
-      "qwen/qwen-2.5-coder-32b-instruct:free",
-      "mistralai/mistral-7b-instruct:free",
+      "openrouter/free",
+      "meta-llama/llama-3.3-70b-instruct",
+      "google/gemini-2.0-flash-lite-001",
+      "deepseek/deepseek-r1",
+      "qwen/qwen-2.5-coder-32b-instruct",
+      "mistralai/mistral-small-24b-instruct-2501:free",
     ];
 
     const openRouterClient = new OpenAI({

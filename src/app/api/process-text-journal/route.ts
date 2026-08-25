@@ -112,17 +112,26 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
     }
 
     if (!responseText && groqKey && groqKey !== "your-groq-api-key-here") {
-      const groqModels = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "llama-3.3-70b-specdec",
-        "llama3-70b-8192",
-        "llama3-8b-8192",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it",
-        "deepseek-r1-distill-llama-70b",
-      ];
       const client = new Groq({ apiKey: groqKey });
+      let groqModels: string[] = [];
+      try {
+        const modelsList = await client.models.list();
+        if (modelsList && Array.isArray(modelsList.data)) {
+          groqModels = modelsList.data
+            .map((m: any) => m.id)
+            .filter((id: string) => typeof id === "string" && !id.includes("whisper") && !id.includes("vision"));
+        }
+      } catch (e) {}
+
+      if (groqModels.length === 0) {
+        groqModels = [
+          "llama-3.3-70b-versatile",
+          "llama-3.1-8b-instant",
+          "llama-3.3-70b-instruct",
+          "llama3.3-70b",
+        ];
+      }
+
       for (const groqModel of groqModels) {
         try {
           console.log(`[Text Journal API] Trying Groq model fallback: ${groqModel}...`);
@@ -161,11 +170,12 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
     if (!responseText && openrouterApiKey) {
       // Try OpenRouter free models fallback
       const freeModels = [
-        "google/gemini-2.0-flash-lite-preview-02-05:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "deepseek/deepseek-r1:free",
-        "qwen/qwen-2.5-coder-32b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
+        "openrouter/free",
+        "meta-llama/llama-3.3-70b-instruct",
+        "google/gemini-2.0-flash-lite-001",
+        "deepseek/deepseek-r1",
+        "qwen/qwen-2.5-coder-32b-instruct",
+        "mistralai/mistral-small-24b-instruct-2501:free",
       ];
       const openRouterClient = new OpenAI({
         apiKey: openrouterApiKey,
