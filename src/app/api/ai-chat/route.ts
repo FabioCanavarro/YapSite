@@ -95,11 +95,26 @@ export async function POST(request: NextRequest) {
       const client = new Groq({
         apiKey: finalApiKey,
       });
-      const response = await client.chat.completions.create({
-        model: finalModel,
-        messages: fullMessages as any,
-      });
-      responseText = response.choices[0]?.message?.content || "";
+      const groqModels = Array.from(new Set([
+        finalModel,
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "mixtral-8x7b-32768",
+      ])).filter(Boolean);
+
+      for (const modelCandidate of groqModels) {
+        try {
+          const response = await client.chat.completions.create({
+            model: modelCandidate,
+            messages: fullMessages as any,
+          });
+          responseText = response.choices[0]?.message?.content || "";
+          if (responseText) break;
+        } catch (err: any) {
+          console.warn(`Groq chat with model ${modelCandidate} failed:`, err?.message || err);
+        }
+      }
     }
 
     return NextResponse.json({ text: responseText }, { status: 200 });

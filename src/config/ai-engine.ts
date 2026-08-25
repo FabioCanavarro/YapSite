@@ -470,21 +470,49 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     }
 
     if (usedGroqFallback || !responseText) {
-      try {
-        console.log("[AI Engine] [Vercel Logger] Performing semantic analysis using Groq Llama fallback (llama-3.3-70b-versatile)...");
-        const llmStart = Date.now();
-        const response = await this.groqClient.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `Here is the raw transcript to analyze:\n\n${rawTranscript}` },
-          ],
-        });
-        responseText = response.choices[0]?.message?.content || null;
-        console.log(`[AI Engine] [Vercel Logger] Groq Llama completion finished successfully in ${Date.now() - llmStart}ms.`);
-      } catch (err: any) {
-        console.error("[AI Engine] [Vercel Logger] Groq Llama fallback failed:", err);
+      const groqModels = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-specdec",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+        "deepseek-r1-distill-llama-70b",
+      ];
+
+      for (const groqModel of groqModels) {
+        try {
+          console.log(`[AI Engine] [Vercel Logger] Performing semantic analysis using Groq fallback (${groqModel})...`);
+          const llmStart = Date.now();
+          let response;
+          try {
+            response = await this.groqClient.chat.completions.create({
+              model: groqModel,
+              response_format: { type: "json_object" },
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Here is the raw transcript to analyze:\n\n${rawTranscript}` },
+              ],
+            });
+          } catch (fmtErr) {
+            response = await this.groqClient.chat.completions.create({
+              model: groqModel,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Here is the raw transcript to analyze:\n\n${rawTranscript}` },
+              ],
+            });
+          }
+          const content = response.choices[0]?.message?.content || null;
+          if (content && content.trim().length > 0) {
+            responseText = content;
+            console.log(`[AI Engine] [Vercel Logger] Groq Llama (${groqModel}) completion finished successfully in ${Date.now() - llmStart}ms.`);
+            break;
+          }
+        } catch (err: any) {
+          console.error(`[AI Engine] [Vercel Logger] Groq model ${groqModel} failed:`, err?.message || err);
+        }
       }
     }
 
@@ -530,7 +558,11 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
   }
 
   private async tryOpenRouterFallback(systemPrompt: string, userContent: string): Promise<string | null> {
-    const openrouterApiKey = process.env.OPENROUTER_API_KEY || process.env.HACK_CLUB_API_KEY || "";
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY || "";
+    if (!openrouterApiKey) {
+      console.log("[AI Engine] [OpenRouter Fallback] Skipped: OPENROUTER_API_KEY is not configured.");
+      return null;
+    }
     
     // List of top reliable free models on OpenRouter
     const freeModels = [
@@ -542,7 +574,7 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     ];
 
     const openRouterClient = new OpenAI({
-      apiKey: openrouterApiKey || "free-access",
+      apiKey: openrouterApiKey,
       baseURL: "https://openrouter.ai/api/v1",
       defaultHeaders: {
         "HTTP-Referer": "https://yapsite.app",

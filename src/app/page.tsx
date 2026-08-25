@@ -8,7 +8,7 @@ import {
   Trash2, ShieldCheck, ChevronRight, Calendar, Info,
   Settings, ArrowUp, ArrowDown, SlidersHorizontal, X,
   Plus, CheckSquare, Square, Play, History, Edit2, Download, MessageSquare, Clock, Edit3, Database,
-  RefreshCw, AlertCircle
+  RefreshCw, AlertCircle, Terminal, Copy
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -224,6 +224,7 @@ export default function Dashboard() {
   const [isBatchReanalyzePopupOpen, setIsBatchReanalyzePopupOpen] = useState(false);
   const [selectedBatchProfileName, setSelectedBatchProfileName] = useState("");
   const [retryingLogIds, setRetryingLogIds] = useState<string[]>([]);
+  const [errorLogModalData, setErrorLogModalData] = useState<{ title: string; logId: string; errorText: string } | null>(null);
 
   const retrySingleLog = async (logId: string) => {
     if (retryingLogIds.includes(logId)) return;
@@ -2129,12 +2130,30 @@ export default function Dashboard() {
                                   Processing...
                                 </span>
                               )}
-                              {log.processing_status === "failed" && (
-                                <span className="text-[9px] bg-stressed/20 text-stressed px-1.5 py-0.5 rounded font-mono shrink-0 flex items-center gap-1">
-                                  <AlertCircle className="w-2.5 h-2.5" />
-                                  Analysis Failed
-                                </span>
-                              )}
+                               {log.processing_status === "failed" && (
+                                 <div className="flex items-center gap-1 shrink-0">
+                                   <span className="text-[9px] bg-stressed/20 text-stressed px-1.5 py-0.5 rounded font-mono shrink-0 flex items-center gap-1">
+                                     <AlertCircle className="w-2.5 h-2.5" />
+                                     Analysis Failed
+                                   </span>
+                                   <button
+                                     onClick={(e) => {
+                                       e.stopPropagation();
+                                       e.preventDefault();
+                                       setErrorLogModalData({
+                                         title: log.ai_title || "Untitled Entry",
+                                         logId: log.id,
+                                         errorText: log.tidied_log || log.raw_transcript || "No detailed error message captured for this entry.",
+                                       });
+                                     }}
+                                     className="px-1.5 py-0.5 rounded text-[9px] bg-stressed/15 hover:bg-stressed/30 text-stressed border border-stressed/30 font-mono flex items-center gap-1 cursor-pointer transition-colors"
+                                     title="View Error Logs"
+                                   >
+                                     <Terminal className="w-2.5 h-2.5" />
+                                     Logs
+                                   </button>
+                                 </div>
+                               )}
                             </div>
                             <h3 className="text-md font-bold text-text group-hover:text-hype transition-colors duration-200 leading-snug truncate pr-6">
                               {log.ai_title || "Untitled Entry"}
@@ -2981,6 +3000,80 @@ export default function Dashboard() {
         onClose={() => setIsDbUsageModalOpen(false)}
         onMigrationComplete={() => fetchLogs()}
       />
+
+      {/* AI Error Log Viewer Modal */}
+      <AnimatePresence>
+        {errorLogModalData && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-crust/85 backdrop-blur-md p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-lg glass-panel p-6 rounded-3xl border border-stressed/30 flex flex-col gap-4 text-left shadow-2xl"
+            >
+              <div className="flex justify-between items-center border-b border-surface pb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-stressed/20 text-stressed">
+                    <Terminal className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-text leading-tight">AI Processing Error Log</h3>
+                    <p className="text-[11px] text-overlay truncate max-w-xs">{errorLogModalData.title}</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setErrorLogModalData(null)}
+                  className="text-overlay hover:text-text cursor-pointer p-1 rounded-lg hover:bg-surface transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between items-center text-[10px] text-overlay font-mono uppercase tracking-wider">
+                  <span>Error Details (ID: {errorLogModalData.logId.slice(0, 8)})</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(errorLogModalData.errorText);
+                      toast.success("Error log copied to clipboard!");
+                    }}
+                    className="hover:text-hype flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span>Copy Log</span>
+                  </button>
+                </div>
+                <div className="bg-crust p-3.5 rounded-2xl border border-surface font-mono text-xs text-stressed/90 overflow-x-auto select-text whitespace-pre-wrap max-h-64 leading-relaxed">
+                  {errorLogModalData.errorText}
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-2 border-t border-surface">
+                <span className="text-[11px] text-overlay/80">Re-run analysis with AI fallbacks</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setErrorLogModalData(null)}
+                    className="px-3.5 py-1.5 rounded-xl bg-surface hover:bg-surface/80 text-xs font-semibold text-text cursor-pointer transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={() => {
+                      const id = errorLogModalData.logId;
+                      setErrorLogModalData(null);
+                      retrySingleLog(id);
+                    }}
+                    className="px-4 py-1.5 rounded-xl bg-hype text-crust font-bold text-xs hover:bg-hype/90 transition-colors flex items-center gap-1.5 cursor-pointer shadow-md"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Retry AI Analysis</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

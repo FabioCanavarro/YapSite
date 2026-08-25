@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { 
   ArrowLeft, Volume2, VolumeX, FileText, Check, 
   Save, Heart, Calendar, Loader2, Sparkles, Copy, Edit3, X, Download, MessageSquare,
-  RefreshCw, AlertCircle
+  RefreshCw, AlertCircle, Terminal
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -82,6 +82,7 @@ export default function JournalDetail({ params }: PageProps) {
   const [editedDateTime, setEditedDateTime] = useState("");
   const [isSavingDetails, setIsSavingDetails] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [showErrorLogs, setShowErrorLogs] = useState(false);
 
   // Beta features, API provider details and KB
   const [betaMode, setBetaMode] = useState(false);
@@ -1184,26 +1185,61 @@ ${reflections || "*No reflections added yet.*"}
           ) : (
             <>
               {(log.processing_status === "pending" || log.processing_status === "failed") && (
-                <div className="w-full mb-4 p-4 rounded-2xl bg-stressed/15 border border-stressed/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-text relative z-10">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-5 h-5 text-stressed shrink-0" />
-                    <div>
-                      <h4 className="text-xs font-bold text-stressed uppercase tracking-wider">
-                        {log.processing_status === "pending" ? "Analysis Pending" : "Analysis Failed"}
-                      </h4>
-                      <p className="text-xs text-text/80">
-                        The AI provider encountered an issue while processing this entry. Click to retry using OpenRouter / Groq fallback models.
-                      </p>
+                <div className="w-full mb-4 p-4 rounded-2xl bg-stressed/15 border border-stressed/30 flex flex-col gap-3 text-text relative z-10">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-5 h-5 text-stressed shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold text-stressed uppercase tracking-wider">
+                          {log.processing_status === "pending" ? "Analysis Pending" : "Analysis Failed"}
+                        </h4>
+                        <p className="text-xs text-text/80">
+                          The AI provider encountered an issue while processing this entry. Click below to retry or view error logs.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {log.processing_status === "failed" && (
+                        <button
+                          onClick={() => setShowErrorLogs(!showErrorLogs)}
+                          className="px-3 py-1.5 rounded-xl bg-stressed/20 text-stressed font-semibold text-xs hover:bg-stressed/30 border border-stressed/30 transition-colors flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Terminal className="w-3.5 h-3.5" />
+                          <span>{showErrorLogs ? "Hide Logs" : "Show Error Logs"}</span>
+                        </button>
+                      )}
+                      <button
+                        onClick={handleRetryAnalysis}
+                        disabled={isReanalyzing}
+                        className="px-3.5 py-1.5 rounded-xl bg-hype text-mantle font-bold text-xs hover:bg-hype/90 transition-colors shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isReanalyzing ? "animate-spin" : ""}`} />
+                        <span>{isReanalyzing ? "Re-analyzing..." : "Retry AI Analysis"}</span>
+                      </button>
                     </div>
                   </div>
-                  <button
-                    onClick={handleRetryAnalysis}
-                    disabled={isReanalyzing}
-                    className="px-3.5 py-1.5 rounded-xl bg-hype text-mantle font-bold text-xs hover:bg-hype/90 transition-colors shrink-0 flex items-center gap-1.5 cursor-pointer shadow-md"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isReanalyzing ? "animate-spin" : ""}`} />
-                    <span>{isReanalyzing ? "Re-analyzing..." : "Retry AI Analysis"}</span>
-                  </button>
+
+                  {showErrorLogs && (
+                    <div className="mt-2 pt-3 border-t border-stressed/20 flex flex-col gap-2">
+                      <div className="flex justify-between items-center text-[10px] font-mono text-overlay uppercase">
+                        <span>Error Diagnostics Log</span>
+                        <button
+                          onClick={() => {
+                            const errContent = log.tidied_log || log.raw_transcript || "No detailed log captured.";
+                            navigator.clipboard.writeText(errContent);
+                            toast.success("Error log copied to clipboard!");
+                          }}
+                          className="hover:text-hype flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy Log</span>
+                        </button>
+                      </div>
+                      <div className="bg-crust/90 p-3 rounded-xl border border-surface text-xs font-mono text-stressed/90 overflow-x-auto select-text whitespace-pre-wrap max-h-48 leading-relaxed">
+                        {log.tidied_log || log.raw_transcript || "No error trace log captured."}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

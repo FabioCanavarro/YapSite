@@ -112,25 +112,54 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
     }
 
     if (!responseText && groqKey && groqKey !== "your-groq-api-key-here") {
-      try {
-        const client = new Groq({ apiKey: groqKey });
-        const res = await client.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
-          ]
-        });
-        responseText = res.choices[0]?.message?.content || null;
-      } catch (err) {
-        console.error("Groq fallback error in text-journal API:", err);
+      const groqModels = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-specdec",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+        "deepseek-r1-distill-llama-70b",
+      ];
+      const client = new Groq({ apiKey: groqKey });
+      for (const groqModel of groqModels) {
+        try {
+          console.log(`[Text Journal API] Trying Groq model fallback: ${groqModel}...`);
+          let res;
+          try {
+            res = await client.chat.completions.create({
+              model: groqModel,
+              response_format: { type: "json_object" },
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
+              ]
+            });
+          } catch (fmtErr) {
+            res = await client.chat.completions.create({
+              model: groqModel,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
+              ]
+            });
+          }
+          const content = res.choices[0]?.message?.content;
+          if (content && content.trim().length > 0) {
+            responseText = content;
+            console.log(`[Text Journal API] Groq model ${groqModel} fallback succeeded.`);
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[Text Journal API] Groq model ${groqModel} failed:`, err?.message || err);
+        }
       }
     }
 
-    if (!responseText) {
+    const openrouterApiKey = process.env.OPENROUTER_API_KEY || "";
+    if (!responseText && openrouterApiKey) {
       // Try OpenRouter free models fallback
-      const openrouterApiKey = process.env.OPENROUTER_API_KEY || hackClubKey || "";
       const freeModels = [
         "google/gemini-2.0-flash-lite-preview-02-05:free",
         "meta-llama/llama-3.3-70b-instruct:free",
@@ -139,7 +168,7 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
         "mistralai/mistral-7b-instruct:free",
       ];
       const openRouterClient = new OpenAI({
-        apiKey: openrouterApiKey || "free-access",
+        apiKey: openrouterApiKey,
         baseURL: "https://openrouter.ai/api/v1",
         defaultHeaders: {
           "HTTP-Referer": "https://yapsite.app",

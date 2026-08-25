@@ -9,6 +9,7 @@ import * as os from "os";
 
 export async function POST(request: NextRequest) {
   let tempFilePath: string | null = null;
+  let currentLogId: string | null = null;
 
   try {
     // 1. Authenticate the User using active session cookies
@@ -26,6 +27,8 @@ export async function POST(request: NextRequest) {
     if (!logId) {
       return NextResponse.json({ error: "Bad Request: Missing logId parameter" }, { status: 400 });
     }
+
+    currentLogId = logId;
 
     // 3. Fetch the Journal Log Row (using admin client to bypass any RLS fetch/update quirks while matching user_id for security)
     const adminSupabase = createAdminClient();
@@ -171,21 +174,20 @@ export async function POST(request: NextRequest) {
   } catch (err: any) {
     console.error("Audio processing API error:", err);
     
-    // Attempt to mark log as failed in DB if logId was provided
-    try {
-      const bodyText = await request.clone().text().catch(() => null);
-      if (bodyText) {
-        const bodyParsed = JSON.parse(bodyText);
-        if (bodyParsed.logId) {
-          const adminSupabase = createAdminClient();
-          await adminSupabase
-            .from("journal_logs")
-            .update({ processing_status: "failed" })
-            .eq("id", bodyParsed.logId);
-        }
+    // Attempt to mark log as failed in DB if currentLogId was set
+    if (currentLogId) {
+      try {
+        const adminSupabase = createAdminClient();
+        await adminSupabase
+          .from("journal_logs")
+          .update({
+            processing_status: "failed",
+            tidied_log: `[AI Processing Error]\n${err?.message || String(err)}`
+          })
+          .eq("id", currentLogId);
+      } catch (e) {
+        console.warn("Failed to set processing_status to failed:", e);
       }
-    } catch (e) {
-      console.warn("Failed to set processing_status to failed:", e);
     }
 
     return NextResponse.json({ error: `Internal Server Error: ${err.message || err}` }, { status: 500 });
