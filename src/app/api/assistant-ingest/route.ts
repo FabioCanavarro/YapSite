@@ -66,8 +66,8 @@ export async function POST(request: NextRequest) {
       cdnFormData.append("file", blob, `ingest-${timestamp}.${fileExtension}`);
 
       const cdnHeaders: HeadersInit = {};
-      const cdnKey = process.env.HACK_CLUB_CDN_API_KEY || process.env.HACK_CLUB_API_KEY;
-      if (cdnKey && !cdnKey.includes("your-")) {
+      const cdnKey = process.env.HACK_CLUB_CDN_API_KEY;
+      if (cdnKey && !cdnKey.includes("your-") && cdnKey.startsWith("sk_cdn_")) {
         cdnHeaders["Authorization"] = `Bearer ${cdnKey}`;
       }
 

@@ -69,8 +69,8 @@ export async function GET(request: NextRequest) {
     }
 
     let cdnQuotaInfo: any = null;
-    const cdnKey = process.env.HACK_CLUB_CDN_API_KEY || process.env.HACK_CLUB_API_KEY;
-    if (cdnKey && !cdnKey.includes("your-")) {
+    const cdnKey = process.env.HACK_CLUB_CDN_API_KEY;
+    if (cdnKey && !cdnKey.includes("your-") && cdnKey.startsWith("sk_cdn_")) {
       try {
         const meRes = await fetch("https://cdn.hackclub.com/api/v4/me", {
           headers: { Authorization: `Bearer ${cdnKey}` },

@@ -2962,14 +2962,14 @@ export default function Dashboard() {
         tagsConfig={tagsConfig}
         onRegisterTags={registerNewCategoryAndTags}
       />
-      {/* Floating Action Button (FAB) for accessible daily journaling */}
+      {/* Floating Action Button (FAB) for accessible daily journaling (Left Side) */}
       <button
         onClick={() => setIsQuickJournalOpen(true)}
         title="Open Daily & Quick Journal"
-        className="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-3.5 py-2.5 rounded-full bg-surface/90 hover:bg-surface backdrop-blur-md text-hype font-bold text-xs shadow-xl border border-hype/30 hover:scale-105 transition-all duration-200 cursor-pointer"
+        className="fixed bottom-6 left-6 z-40 flex items-center gap-2.5 px-4 py-3 rounded-full bg-surface/90 hover:bg-surface backdrop-blur-md text-hype font-bold text-xs shadow-xl border border-hype/30 hover:scale-105 transition-all duration-200 cursor-pointer group shadow-hype/10"
       >
-        <Edit3 className="w-4 h-4 text-hype" />
-        <span className="hidden md:inline text-text">Quick Journal</span>
+        <Edit3 className="w-4 h-4 text-hype group-hover:rotate-12 transition-transform" />
+        <span className="text-text font-semibold">Quick Journal</span>
       </button>
 
       {/* Quick Accessible Daily Journal Modal */}
