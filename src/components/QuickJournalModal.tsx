@@ -4,11 +4,12 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Calendar, Clock, Edit3, Sparkles, Save, X, Smile,
-  CheckCircle2, Wand2, RefreshCw, AlignLeft, ShieldCheck, Play
+  CheckCircle2, Wand2, RefreshCw, AlignLeft, ShieldCheck, Play, FileText
 } from "lucide-react";
 import { toast } from "sonner";
 import { animateModalEnter, animateModalExit, animateThemeChange } from "@/utils/gsapAnimations";
 import MarkdownRenderer from "./MarkdownRenderer";
+import VimJournalEditor from "./VimJournalEditor";
 
 interface QuickJournalModalProps {
   isOpen: boolean;
@@ -24,6 +25,8 @@ export default function QuickJournalModal({
   const [activeTab, setActiveTab] = useState<"daily" | "past_hours" | "general">("daily");
   const [timeWindow, setTimeWindow] = useState("Last 3 Hours");
   const [rawText, setRawText] = useState("");
+  const [tidiedText, setTidiedText] = useState("");
+  const [isEditingTidied, setIsEditingTidied] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedMoodColor, setSelectedMoodColor] = useState("#74c7ec");
   const [previewTidied, setPreviewTidied] = useState<string | null>(null);
@@ -65,8 +68,10 @@ export default function QuickJournalModal({
       }
     } else {
       setRawText("");
+      setTidiedText("");
       setPreviewTidied(null);
       setPreviewReview(null);
+      setIsEditingTidied(false);
     }
   }, [isOpen]);
 
@@ -110,6 +115,7 @@ export default function QuickJournalModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: rawText,
+          tidiedLog: tidiedText || undefined,
           entryType: activeTab,
           timeWindow,
           customMoods: moodOptions,
@@ -123,6 +129,7 @@ export default function QuickJournalModal({
 
       const data = await res.json();
       setPreviewTidied(data.tidied_log);
+      setTidiedText(data.tidied_log);
       setPreviewReview(data.reflections);
       setAiTitle(data.ai_title);
       setSelectedMoodColor(data.ai_mood_color || selectedMoodColor);
@@ -133,7 +140,7 @@ export default function QuickJournalModal({
         setCategory(catTag.replace("_category:", ""));
       }
 
-      toast.success("AI Clean Up, Mood Analysis & Review complete!", { id: toastId });
+      toast.success("AI Clean Up complete! Raw transcript remains untouched.", { id: toastId });
     } catch (err: any) {
       console.error(err);
       toast.error(err.message || "Failed to analyze journal text.", { id: toastId });
@@ -157,6 +164,7 @@ export default function QuickJournalModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: rawText,
+          tidiedLog: tidiedText || previewTidied || undefined,
           entryType: activeTab,
           timeWindow,
           customMoods: moodOptions,
@@ -197,7 +205,7 @@ export default function QuickJournalModal({
       {/* Modal Card */}
       <div
         ref={modalRef}
-        className="relative w-full max-w-3xl max-h-[90vh] bg-slate-950/95 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden z-10"
+        className="relative w-full max-w-4xl max-h-[92vh] bg-slate-950/95 border border-slate-800 rounded-3xl shadow-2xl flex flex-col overflow-hidden z-10"
         style={{
           boxShadow: `0 0 40px ${selectedMoodColor}20`,
         }}
@@ -215,11 +223,11 @@ export default function QuickJournalModal({
               <h2 className="text-lg md:text-xl font-bold text-slate-100 flex items-center gap-2">
                 Quick Journaling
                 <span className="text-xs px-2.5 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30 font-medium">
-                  Accessible
+                  Vim Mode & Auto-Resize
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Write on the spot, cleanup grammar, analyze mood & get AI review
+                Write freely with Vim mode and dynamic expansion. Clean mode leaves raw transcript 100% untouched.
               </p>
             </div>
           </div>
@@ -272,9 +280,16 @@ export default function QuickJournalModal({
             </button>
           </div>
 
-          {/* Word count badge */}
-          <div className="text-xs text-slate-400 px-3 py-1 bg-slate-900/80 rounded-lg border border-slate-800">
-            {rawText.trim() ? rawText.trim().split(/\s+/).length : 0} words
+          {/* Word count & title badge */}
+          <div className="flex items-center gap-2">
+            {aiTitle && (
+              <span className="text-xs font-medium text-purple-400 truncate max-w-xs bg-purple-950/40 px-2.5 py-1 rounded-lg border border-purple-800/40">
+                ✨ Title: "{aiTitle}"
+              </span>
+            )}
+            <div className="text-xs text-slate-400 px-3 py-1 bg-slate-900/80 rounded-lg border border-slate-800">
+              {rawText.trim() ? rawText.trim().split(/\s+/).length : 0} words
+            </div>
           </div>
         </div>
 
@@ -329,32 +344,20 @@ export default function QuickJournalModal({
             </div>
           )}
 
-          {/* Text Area Input */}
-          <div className="space-y-2">
-            <div className="flex justify-between items-center">
-              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Your Thoughts (Type freely):
-              </label>
-              {aiTitle && (
-                <span className="text-xs font-medium text-purple-400 truncate max-w-xs">
-                  ✨ Title: "{aiTitle}"
-                </span>
-              )}
-            </div>
-            <textarea
-              value={rawText}
-              onChange={(e) => setRawText(e.target.value)}
-              placeholder={
-                activeTab === "daily"
-                  ? "Write down your daily recap, achievements, challenges, or thoughts..."
-                  : activeTab === "past_hours"
-                  ? "What happened in the past few hours? Journal on the spot..."
-                  : "Type anything on your mind..."
-              }
-              rows={6}
-              className="w-full bg-slate-900/90 border border-slate-800 focus:border-purple-500 rounded-2xl p-4 text-sm text-slate-100 placeholder-slate-500 focus:outline-none transition resize-none leading-relaxed"
-            />
-          </div>
+          {/* Vim & Auto-Resizing Journal Editor (Raw Transcript) */}
+          <VimJournalEditor
+            value={rawText}
+            onChange={setRawText}
+            label="Raw Journal Transcript (Untouched Raw Input)"
+            placeholder={
+              activeTab === "daily"
+                ? "Write down your daily recap, achievements, challenges, or thoughts..."
+                : activeTab === "past_hours"
+                ? "What happened in the past few hours? Journal on the spot..."
+                : "Type anything on your mind..."
+            }
+            minRows={6}
+          />
 
           {/* Mood Color Selector */}
           <div className="space-y-2">
@@ -385,24 +388,39 @@ export default function QuickJournalModal({
             </div>
           </div>
 
-          {/* Live AI Clean Up Preview (if generated) */}
+          {/* Cleaned Up / Tidied Journal Section (Separated from Raw Transcript) */}
           {previewTidied && (
             <div className="bg-slate-900/80 border border-purple-900/40 rounded-2xl p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <h4 className="text-xs font-bold text-purple-400 uppercase tracking-wider flex items-center gap-2">
                   <Sparkles className="w-4 h-4" />
-                  AI Tidied & Cleaned Up Journal:
+                  Cleaned Up / Tidied Journal (Raw Transcript is untouched):
                 </h4>
                 <button
-                  onClick={() => setRawText(previewTidied)}
-                  className="text-xs px-2.5 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 transition"
+                  type="button"
+                  onClick={() => setIsEditingTidied(!isEditingTidied)}
+                  className="text-xs px-2.5 py-1 rounded-lg bg-purple-600/30 hover:bg-purple-600/50 text-purple-200 border border-purple-500/40 transition flex items-center gap-1"
                 >
-                  Apply Clean Up to Text
+                  <Edit3 className="w-3.5 h-3.5" />
+                  {isEditingTidied ? "Preview Markdown" : "Edit Cleaned Log"}
                 </button>
               </div>
-              <div className="text-sm text-slate-200 bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-                <MarkdownRenderer content={previewTidied} />
-              </div>
+
+              {isEditingTidied ? (
+                <VimJournalEditor
+                  value={tidiedText || previewTidied}
+                  onChange={(val) => {
+                    setTidiedText(val);
+                    setPreviewTidied(val);
+                  }}
+                  label="Tidied Log Editor"
+                  minRows={5}
+                />
+              ) : (
+                <div className="text-sm text-slate-200 bg-slate-950 p-3.5 rounded-xl border border-slate-800">
+                  <MarkdownRenderer content={tidiedText || previewTidied} />
+                </div>
+              )}
             </div>
           )}
 

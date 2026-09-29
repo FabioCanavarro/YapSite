@@ -17,6 +17,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       text,
+      tidiedLog,
       entryType = "daily", // "daily" | "past_hours" | "general"
       timeWindow = "", // e.g. "Last 3 Hours"
       logId,
@@ -92,22 +93,31 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
     let responseText: string | null = null;
 
     if (hackClubKey && hackClubKey !== "your-hack-club-api-key-here") {
-      try {
-        const client = new OpenAI({
-          apiKey: hackClubKey,
-          baseURL: "https://ai.hackclub.com/proxy/v1",
-        });
-        const res = await client.chat.completions.create({
-          model: "gpt-4o-mini",
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
-          ]
-        });
-        responseText = res.choices[0]?.message?.content || null;
-      } catch (err) {
-        console.warn("Hack Club AI error in text-journal API, trying Groq fallback:", err);
+      const client = new OpenAI({
+        apiKey: hackClubKey,
+        baseURL: "https://ai.hackclub.com/proxy/v1",
+      });
+      const candidates = ["gpt-4o-mini", "gpt-4o", "qwen-2.5-coder-32b", "llama-3.3-70b", "claude-3-5-haiku"];
+      for (const modelCandidate of candidates) {
+        try {
+          console.log(`[Text Journal API] Trying Hack Club model: ${modelCandidate}...`);
+          const res = await client.chat.completions.create({
+            model: modelCandidate,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: `Raw Typed Journal Entry:\n${text}` }
+            ]
+          });
+          const content = res.choices[0]?.message?.content;
+          if (content && content.trim().length > 0) {
+            responseText = content;
+            console.log(`[Text Journal API] Hack Club model ${modelCandidate} succeeded.`);
+            break;
+          }
+        } catch (err) {
+          console.warn(`[Text Journal API] Hack Club model ${modelCandidate} failed:`, err);
+        }
       }
     }
 
@@ -246,7 +256,8 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
       }
     }
 
-    // 6. Save or Update in Supabase
+      // 6. Save or Update in Supabase
+    const finalTidiedLog = (tidiedLog && typeof tidiedLog === "string" && tidiedLog.trim()) ? tidiedLog : parsedResult.tidied_log;
     const audioUrlTag = entryType === "daily" ? "daily_journal" : entryType === "past_hours" ? "past_hours_journal" : "text_journal";
     const customTags = [
       `_category:${parsedResult.ai_category}`,
@@ -262,7 +273,7 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
           ai_title: parsedResult.ai_title,
           ai_mood_color: parsedResult.ai_mood_color,
           raw_transcript: text,
-          tidied_log: parsedResult.tidied_log,
+          tidied_log: finalTidiedLog,
           ai_tags: parsedResult.ai_tags,
           custom_tags: customTags,
           reflections: parsedResult.reflections,
@@ -285,7 +296,7 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
           ai_title: parsedResult.ai_title,
           ai_mood_color: parsedResult.ai_mood_color,
           raw_transcript: text,
-          tidied_log: parsedResult.tidied_log,
+          tidied_log: finalTidiedLog,
           ai_tags: parsedResult.ai_tags,
           custom_tags: customTags,
           reflections: parsedResult.reflections,

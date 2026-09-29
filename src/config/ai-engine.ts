@@ -447,21 +447,31 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     const hasHackClub = hackClubApiKey && hackClubApiKey !== "your-hack-club-api-key-here";
 
     if (hasHackClub) {
-      try {
-        console.log("[AI Engine] [Vercel Logger] Attempting semantic analysis using Hack Club AI (gpt-4o-mini)...");
-        const llmStart = Date.now();
-        const response = await this.openaiClient.chat.completions.create({
-          model: "gpt-4o-mini",
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: `Here is the raw transcript to analyze:\n\n${rawTranscript}` },
-          ],
-        });
-        responseText = response.choices[0]?.message?.content || null;
-        console.log(`[AI Engine] [Vercel Logger] Hack Club AI completion finished successfully in ${Date.now() - llmStart}ms.`);
-      } catch (err: any) {
-        console.error("[AI Engine] [Vercel Logger] Hack Club AI analysis failed, falling back to Groq Llama:", err);
+      const candidates = ["gpt-4o-mini", "gpt-4o", "qwen-2.5-coder-32b", "llama-3.3-70b", "claude-3-5-haiku"];
+      for (const mCandidate of candidates) {
+        try {
+          console.log(`[AI Engine] [Vercel Logger] Attempting semantic analysis using Hack Club AI (${mCandidate})...`);
+          const llmStart = Date.now();
+          const response = await this.openaiClient.chat.completions.create({
+            model: mCandidate,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: `Here is the raw transcript to analyze:\n\n${rawTranscript}` },
+            ],
+          });
+          const text = response.choices[0]?.message?.content || null;
+          if (text && text.trim().length > 0) {
+            responseText = text;
+            console.log(`[AI Engine] [Vercel Logger] Hack Club AI (${mCandidate}) completion finished successfully in ${Date.now() - llmStart}ms.`);
+            break;
+          }
+        } catch (err: any) {
+          console.warn(`[AI Engine] [Vercel Logger] Hack Club AI (${mCandidate}) failed:`, err?.message || err);
+        }
+      }
+      if (!responseText) {
+        console.warn("[AI Engine] All Hack Club AI model candidates failed, falling back to Groq Llama...");
         usedGroqFallback = true;
       }
     } else {

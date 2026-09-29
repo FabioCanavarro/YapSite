@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/client";
 import EchoCard from "@/components/EchoCard";
 import MarkdownRenderer from "@/components/MarkdownRenderer";
 import JournalAIChatDrawer from "@/components/JournalAIChatDrawer";
+import VimJournalEditor from "@/components/VimJournalEditor";
 
 interface Log {
   id: string;
@@ -1342,21 +1343,12 @@ ${reflections || "*No reflections added yet.*"}
 
           {isEditingTidied ? (
             <>
-              <textarea
-                placeholder="Edit tidied thoughts here..."
+              <VimJournalEditor
                 value={editedTidiedText}
-                onChange={(e) => {
-                  setEditedTidiedText(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = e.target.scrollHeight + 'px';
-                }}
-                ref={(el) => {
-                  if (el) {
-                    el.style.height = 'auto';
-                    el.style.height = el.scrollHeight + 'px';
-                  }
-                }}
-                className="w-full p-4 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm leading-relaxed resize-none overflow-hidden font-sans"
+                onChange={setEditedTidiedText}
+                label="Edit Tidied Thoughts"
+                placeholder="Edit tidied thoughts here..."
+                minRows={5}
               />
 
               <div className="flex gap-2.5">
@@ -1455,21 +1447,12 @@ ${reflections || "*No reflections added yet.*"}
 
           {isEditingReflections ? (
             <>
-              <textarea
-                placeholder="Write retroactive reflections here... What did you learn? How do you feel looking back?"
+              <VimJournalEditor
                 value={reflections}
-                onChange={(e) => {
-                  setReflections(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = e.target.scrollHeight + 'px';
-                }}
-                ref={(el) => {
-                  if (el) {
-                    el.style.height = 'auto';
-                    el.style.height = el.scrollHeight + 'px';
-                  }
-                }}
-                className="w-full p-4 bg-crust rounded-2xl border border-overlay/10 text-text placeholder-overlay focus:outline-none focus:border-hype/50 text-sm leading-relaxed resize-none overflow-hidden"
+                onChange={setReflections}
+                label="Therapist Vault Reflections"
+                placeholder="Write retroactive reflections here... What did you learn? How do you feel looking back?"
+                minRows={5}
               />
 
               <div className="flex gap-2.5">
