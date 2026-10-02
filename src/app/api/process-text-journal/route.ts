@@ -123,24 +123,36 @@ ${defaultMoods.map((m: any) => `         - ${m.name} -> '${m.color}'`).join("\n"
 
     if (!responseText && groqKey && groqKey !== "your-groq-api-key-here") {
       const client = new Groq({ apiKey: groqKey });
-      let groqModels: string[] = [];
+      const preferredGroqModels = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+      ];
+
+      let dynamicGroqModels: string[] = [];
       try {
         const modelsList = await client.models.list();
         if (modelsList && Array.isArray(modelsList.data)) {
-          groqModels = modelsList.data
+          const isInvalidGroqModel = (id: string) =>
+            id.includes("whisper") ||
+            id.includes("vision") ||
+            id.includes("guard") ||
+            id.includes("orpheus") ||
+            id.includes("allam") ||
+            id.includes("arabic") ||
+            id.includes("bge") ||
+            id.includes("embedding");
+
+          dynamicGroqModels = modelsList.data
             .map((m: any) => m.id)
-            .filter((id: string) => typeof id === "string" && !id.includes("whisper") && !id.includes("vision"));
+            .filter((id: string) => typeof id === "string" && !isInvalidGroqModel(id));
         }
       } catch (e) {}
 
-      if (groqModels.length === 0) {
-        groqModels = [
-          "llama-3.3-70b-versatile",
-          "llama-3.1-8b-instant",
-          "llama-3.3-70b-instruct",
-          "llama3.3-70b",
-        ];
-      }
+      const groqModels = Array.from(new Set([...preferredGroqModels, ...dynamicGroqModels]));
 
       for (const groqModel of groqModels) {
         try {

@@ -210,6 +210,7 @@ export class GroqHackClubEngine implements AIEngine {
       file: fs.createReadStream(filePath),
       model: "whisper-large-v3",
       response_format: "json",
+      prompt: "This is a personal voice journal entry recorded in English. Please transcribe all speech accurately in English."
     };
     if (langOption && langOption !== "auto" && langOption !== "multidetect") {
       whisperOptions.language = langOption;
@@ -421,7 +422,9 @@ export class GroqHackClubEngine implements AIEngine {
       ` : ""}
 
       LANGUAGE DIRECTION:
-      Output ALL fields ("ai_title", "ai_category", "ai_tags", "tidied_log") in the same language as detected in the raw transcript. If the transcript is in Spanish, output all fields in Spanish. If in Portuguese, output in Portuguese.
+      - Output ALL fields ("ai_title", "ai_category", "ai_tags", "tidied_log") in ENGLISH by default.
+      - If the user speaks English or mixed English (including code-switching with Bahasa, Spanish, Singlish, etc.), write the tidied journal entry and all metadata in clear, natural ENGLISH while retaining specific names, places, and quotes.
+      - Only output in another language if the ENTIRE entry is spoken exclusively in that foreign language without any English content.
 
       FORMATTING DIRECTIONS:
       ${customPrompt ? `Apply the following custom user prompt instructions to shape the tone, formatting, and layout of the tidied journal:
@@ -462,7 +465,7 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     const hasHackClub = hackClubApiKey && hackClubApiKey !== "your-hack-club-api-key-here";
 
     if (hasHackClub) {
-      const candidates = ["gpt-4o-mini", "gpt-4o", "qwen-2.5-coder-32b", "llama-3.3-70b", "claude-3-5-haiku"];
+      const candidates = ["openai/gpt-4o-mini", "openai/gpt-4o", "meta-llama/llama-3.3-70b-instruct", "qwen/qwen-2.5-coder-32b-instruct"];
       for (const mCandidate of candidates) {
         try {
           console.log(`[AI Engine] [Vercel Logger] Attempting semantic analysis using Hack Club AI (${mCandidate})...`);
@@ -483,10 +486,14 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
           }
         } catch (err: any) {
           console.warn(`[AI Engine] [Vercel Logger] Hack Club AI (${mCandidate}) failed:`, err?.message || err);
+          if (err?.status === 401 || err?.message?.includes("Authentication failed")) {
+            console.warn("[AI Engine] Hack Club AI key unauthorized. Skipping remaining candidates.");
+            break;
+          }
         }
       }
       if (!responseText) {
-        console.warn("[AI Engine] All Hack Club AI model candidates failed, falling back to Groq Llama...");
+        console.warn("[AI Engine] Hack Club AI candidates unavailable, falling back to Groq Llama...");
         usedGroqFallback = true;
       }
     } else {
@@ -495,31 +502,43 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
     }
 
     if (usedGroqFallback || !responseText) {
-      let activeGroqModels: string[] = [];
+      const preferredGroqModels = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it",
+      ];
+
+      let dynamicGroqModels: string[] = [];
       try {
         const modelsList = await this.groqClient.models.list();
         if (modelsList && Array.isArray(modelsList.data)) {
-          activeGroqModels = modelsList.data
+          const isInvalidGroqModel = (id: string) =>
+            id.includes("whisper") ||
+            id.includes("vision") ||
+            id.includes("guard") ||
+            id.includes("orpheus") ||
+            id.includes("allam") ||
+            id.includes("arabic") ||
+            id.includes("bge") ||
+            id.includes("embedding");
+
+          dynamicGroqModels = modelsList.data
             .map((m: any) => m.id)
-            .filter((id: string) => typeof id === "string" && !id.includes("whisper") && !id.includes("vision"));
-          console.log(`[AI Engine] [Vercel Logger] Dynamically fetched ${activeGroqModels.length} active models from Groq: [${activeGroqModels.join(", ")}]`);
+            .filter((id: string) => typeof id === "string" && !isInvalidGroqModel(id));
         }
       } catch (listErr) {
         console.warn("[AI Engine] [Vercel Logger] Failed to fetch active Groq models list dynamically:", listErr);
       }
 
-      if (activeGroqModels.length === 0) {
-        activeGroqModels = [
-          "llama-3.3-70b-versatile",
-          "llama-3.1-8b-instant",
-          "llama-3.3-70b-instruct",
-          "llama3.3-70b",
-        ];
-      }
+      const activeGroqModels = Array.from(new Set([...preferredGroqModels, ...dynamicGroqModels]));
+      console.log(`[AI Engine] [Vercel Logger] Filtered ${activeGroqModels.length} valid chat models from Groq.`);
 
       for (const groqModel of activeGroqModels) {
         try {
-          console.log(`[AI Engine] [Vercel Logger] Performing semantic analysis using Groq fallback (${groqModel})...`);
+          console.log(`[AI Engine] [Vercel Logger] Performing semantic analysis using Groq (${groqModel})...`);
           const llmStart = Date.now();
           let response;
           try {
@@ -547,7 +566,7 @@ ${customMoods.map(m => `                          - ${m.name} -> '${m.color}'`).
             break;
           }
         } catch (err: any) {
-          console.error(`[AI Engine] [Vercel Logger] Groq model ${groqModel} failed:`, err?.message || err);
+          console.warn(`[AI Engine] [Vercel Logger] Groq model ${groqModel} failed:`, err?.message || err);
         }
       }
     }
