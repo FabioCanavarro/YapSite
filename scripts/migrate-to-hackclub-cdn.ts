@@ -29,9 +29,11 @@ if (!supabaseUrl || !serviceRoleKey) {
   process.exit(1);
 }
 
-const headers: HeadersInit = {
-  apikey: serviceRoleKey,
-  Authorization: `Bearer ${serviceRoleKey}`,
+const activeKey: string = serviceRoleKey;
+
+const headers: Record<string, string> = {
+  apikey: activeKey,
+  Authorization: `Bearer ${activeKey}`,
   "Content-Type": "application/json",
   Prefer: "return=representation",
 };
@@ -61,6 +63,8 @@ async function runMigration() {
     if (url === "text_journal" || url === "daily_journal" || url === "past_hours_journal" || url === "knowledge_base" || url === "settings_profile") {
       return false;
     }
+    const customTags = log.custom_tags || [];
+    if (customTags.includes("_storage:missing")) return false;
     return true;
   });
 
@@ -97,68 +101,132 @@ async function runMigration() {
         throw new Error("HACK_CLUB_CDN_API_KEY is missing or invalid (must start with 'sk_cdn_')");
       }
 
-      // Try direct upload_from_url first (bypasses memory buffering & Cloudflare WAF body limits)
+      // Try direct upload_from_url with a Supabase signed URL (bypasses local memory & WAF body limits)
       let uploadFromUrlSuccess = false;
-      if (originalUrl.includes("supabase")) {
+      if (storagePath) {
         try {
-          const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
-          const fromUrlHeaders: HeadersInit = {
-            Authorization: `Bearer ${cdnKey}`,
-            "Content-Type": "application/json",
-          };
-          if (serviceRoleKey) {
-            fromUrlHeaders["X-Download-Authorization"] = `Bearer ${serviceRoleKey}`;
-          }
-
-          const fromUrlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
+          const formattedStoragePath = storagePath.split("/").map(encodeURIComponent).join("/");
+          const supabaseRest = await fetch(`${supabaseUrl}/storage/v1/object/sign/audio_journals/${formattedStoragePath}`, {
             method: "POST",
-            headers: fromUrlHeaders,
-            body: JSON.stringify({ url: authenticatedUrl }),
+            headers: {
+              apikey: serviceRoleKey || "",
+              Authorization: `Bearer ${serviceRoleKey || ""}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ expiresIn: 3600 }),
           });
 
-          if (fromUrlRes.ok) {
-            const cdnData = await fromUrlRes.json();
-            if (cdnData.url) {
-              newCdnUrl = cdnData.url;
-              fileSize = cdnData.size || 0;
-              uploadFromUrlSuccess = true;
+          if (supabaseRest.ok) {
+            const signData = await supabaseRest.json();
+            const signedPath = signData.signedURL || signData.signedUrl;
+            const signedUrl = signedPath
+              ? (signedPath.startsWith("http") ? signedPath : `${supabaseUrl}/storage/v1${signedPath}`)
+              : "";
+
+            if (signedUrl) {
+              const fromUrlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${cdnKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ url: signedUrl }),
+              });
+
+              if (fromUrlRes.ok) {
+                const cdnData = await fromUrlRes.json();
+                if (cdnData.url) {
+                  newCdnUrl = cdnData.url;
+                  fileSize = cdnData.size || 0;
+                  uploadFromUrlSuccess = true;
+                }
+              } else {
+                console.log(`   ⚠️ upload_from_url status: ${fromUrlRes.status} ${await fromUrlRes.text()}`);
+              }
+            } else {
+              console.log(`   ⚠️ Could not extract signed URL from Supabase response:`, signData);
             }
+          } else {
+            console.log(`   ℹ️ Supabase sign URL status ${supabaseRest.status}`);
           }
-        } catch (e) {}
+        } catch (e: any) {
+          console.log(`   ⚠️ upload_from_url error: ${e?.message || e}`);
+        }
       }
 
       // Fallback to direct file download & upload
       if (!uploadFromUrlSuccess) {
-        const authHeaders: HeadersInit = { Authorization: `Bearer ${cdnKey}` };
-        let audioRes = await fetch(originalUrl);
-        if (!audioRes.ok && originalUrl.includes("supabase")) {
-          const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
-          audioRes = await fetch(authenticatedUrl, { headers });
-        }
+        const downloadHeaders: HeadersInit = {
+          apikey: serviceRoleKey || "",
+          Authorization: `Bearer ${serviceRoleKey || ""}`,
+        };
 
-        if (!audioRes.ok) {
-          if (audioRes.status === 404) {
-            console.log(`   ℹ️ Storage object missing in Supabase (Status 404). Skipping.`);
-            failed++;
-            continue;
+        let audioRes: Response | null = null;
+        let lastFetchErr: any = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            audioRes = await fetch(originalUrl, { headers: downloadHeaders });
+            if (!audioRes.ok && originalUrl.includes("supabase")) {
+              const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
+              audioRes = await fetch(authenticatedUrl, { headers: downloadHeaders });
+            }
+            if (audioRes.ok || audioRes.status === 404 || audioRes.status === 400) break;
+          } catch (retryErr) {
+            lastFetchErr = retryErr;
+            await new Promise((r) => setTimeout(r, 500 * attempt));
           }
-          throw new Error(`Failed to download from Supabase Storage: status ${audioRes.status}`);
         }
 
-        const audioBlob = await audioRes.blob();
-        fileSize = audioBlob.size;
+        if (!audioRes || !audioRes.ok) {
+          console.log(`   ℹ️ Storage object missing in Supabase (Status: ${audioRes?.status || "error"}). Tagging entry ${log.id} as _storage:missing.`);
+          const customTags = (log.custom_tags || []).filter((t: string) => t !== "_storage:cleared");
+          if (!customTags.includes("_storage:missing")) customTags.push("_storage:missing");
 
+          try {
+            const patchRes = await fetch(`${supabaseUrl}/rest/v1/journal_logs?id=eq.${log.id}`, {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({ custom_tags: customTags }),
+            });
+            if (!patchRes.ok) {
+              console.log(`   ⚠️ DB PATCH status ${patchRes.status}: ${await patchRes.text()}`);
+            }
+          } catch (patchErr: any) {
+            console.log(`   ⚠️ DB PATCH error: ${patchErr?.message || patchErr}`);
+          }
+          failed++;
+          continue;
+        }
+
+        const arrayBuffer = await audioRes.arrayBuffer();
+        const audioBuffer = Buffer.from(arrayBuffer);
+        fileSize = audioBuffer.length;
+
+        const authHeaders: HeadersInit = { Authorization: `Bearer ${cdnKey}` };
         const formData = new FormData();
-        formData.append("file", audioBlob, fileName);
+        formData.append("file", new File([audioBuffer], fileName, { type: "audio/wav" }));
 
-        const cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
-          method: "POST",
-          headers: authHeaders,
-          body: formData,
-        });
+        let cdnRes: Response | null = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            cdnRes = await fetch("https://cdn.hackclub.com/api/v4/upload", {
+              method: "POST",
+              headers: authHeaders,
+              body: formData,
+            });
+            if (cdnRes.ok) break;
+            const textErr = await cdnRes.text().catch(() => "");
+            console.log(`   ⚠️ CDN upload attempt ${attempt} status ${cdnRes.status}: ${textErr}`);
+          } catch (cdnAttemptErr: any) {
+            console.log(`   ⚠️ CDN upload attempt ${attempt} error: ${cdnAttemptErr?.message || cdnAttemptErr}`);
+            await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
 
-        if (!cdnRes.ok) {
-          throw new Error(`Hack Club CDN status ${cdnRes.status}`);
+        if (!cdnRes || !cdnRes.ok) {
+          const errBody = cdnRes ? await cdnRes.text().catch(() => "") : "";
+          throw new Error(`Hack Club CDN status ${cdnRes?.status || "failed"}${errBody ? `: ${errBody}` : ""}`);
         }
 
         const cdnData = await cdnRes.json();

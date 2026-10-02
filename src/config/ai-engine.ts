@@ -55,139 +55,154 @@ export class GroqHackClubEngine implements AIEngine {
   }
 
   private splitWavFile(filePath: string, maxChunkSizeInBytes: number): string[] {
-    const fileBuffer = fs.readFileSync(filePath);
-    
-    // Verify RIFF WAVE header
-    if (fileBuffer.toString("ascii", 0, 4) !== "RIFF" || fileBuffer.toString("ascii", 8, 12) !== "WAVE") {
-      throw new Error("Input file is not a valid RIFF WAVE file.");
-    }
-    
-    const numChannels = fileBuffer.readUInt16LE(22);
-    const sampleRate = fileBuffer.readUInt32LE(24);
-    const bitsPerSample = fileBuffer.readUInt16LE(34);
-    const blockAlign = fileBuffer.readUInt16LE(32);
+    const stats = fs.statSync(filePath);
+    const fileSize = stats.size;
+    const fd = fs.openSync(filePath, "r");
 
-    if (!numChannels || !sampleRate || !bitsPerSample || !blockAlign) {
-      throw new Error("Invalid WAV format parameters read from header.");
-    }
-    
-    let dataOffset = 44; // Default fallback
     try {
-      let tempOffset = 12;
-      while (tempOffset < fileBuffer.length - 8) {
-        const chunkId = fileBuffer.toString("ascii", tempOffset, tempOffset + 4);
-        const chunkSize = fileBuffer.readUInt32LE(tempOffset + 4);
-        if (chunkId === "data") {
-          dataOffset = tempOffset + 8;
-          break;
+      const headerBuf = Buffer.alloc(44);
+      fs.readSync(fd, headerBuf, 0, 44, 0);
+
+      // Verify RIFF WAVE header
+      if (headerBuf.toString("ascii", 0, 4) !== "RIFF" || headerBuf.toString("ascii", 8, 12) !== "WAVE") {
+        throw new Error("Input file is not a valid RIFF WAVE file.");
+      }
+
+      const numChannels = headerBuf.readUInt16LE(22);
+      const sampleRate = headerBuf.readUInt32LE(24);
+      const bitsPerSample = headerBuf.readUInt16LE(34);
+      const blockAlign = headerBuf.readUInt16LE(32);
+
+      if (!numChannels || !sampleRate || !bitsPerSample || !blockAlign) {
+        throw new Error("Invalid WAV format parameters read from header.");
+      }
+
+      let dataOffset = 44; // Default fallback
+      try {
+        let tempOffset = 12;
+        const searchBuf = Buffer.alloc(8);
+        while (tempOffset < Math.min(fileSize - 8, 2048)) {
+          fs.readSync(fd, searchBuf, 0, 8, tempOffset);
+          const chunkId = searchBuf.toString("ascii", 0, 4);
+          const chunkSize = searchBuf.readUInt32LE(4);
+          if (chunkId === "data") {
+            dataOffset = tempOffset + 8;
+            break;
+          }
+          tempOffset += 8 + chunkSize;
         }
-        tempOffset += 8 + chunkSize;
+      } catch (err) {
+        console.warn("Failed to dynamically find WAV data chunk offset, defaulting to 44:", err);
       }
-    } catch (err) {
-      console.warn("Failed to dynamically find WAV data chunk offset, defaulting to 44:", err);
-    }
-    
-    const rawPcmData = fileBuffer.subarray(dataOffset);
-    const totalPcmBytes = rawPcmData.length;
-    
-    const chunks: string[] = [];
-    const tempDir = path.dirname(filePath);
-    const ext = path.extname(filePath);
-    const baseName = path.basename(filePath, ext);
-    
-    let currentOffset = 0;
-    let chunkIdx = 0;
-    
-    while (currentOffset < totalPcmBytes) {
-      let chunkSize = maxChunkSizeInBytes;
-      if (currentOffset + chunkSize > totalPcmBytes) {
-        chunkSize = totalPcmBytes - currentOffset;
-      } else {
-        // Align to block boundaries (samples)
-        chunkSize = Math.floor(chunkSize / blockAlign) * blockAlign;
+
+      const totalPcmBytes = fileSize - dataOffset;
+      const chunks: string[] = [];
+      const tempDir = path.dirname(filePath);
+      const ext = path.extname(filePath);
+      const baseName = path.basename(filePath, ext);
+
+      let currentPcmOffset = 0;
+      let chunkIdx = 0;
+
+      while (currentPcmOffset < totalPcmBytes) {
+        let chunkSize = maxChunkSizeInBytes;
+        if (currentPcmOffset + chunkSize > totalPcmBytes) {
+          chunkSize = totalPcmBytes - currentPcmOffset;
+        } else {
+          // Align to block boundaries (samples)
+          chunkSize = Math.floor(chunkSize / blockAlign) * blockAlign;
+        }
+
+        const chunkPcm = Buffer.alloc(chunkSize);
+        fs.readSync(fd, chunkPcm, 0, chunkSize, dataOffset + currentPcmOffset);
+        currentPcmOffset += chunkSize;
+
+        // Construct new WAV header for this chunk
+        const headerBuffer = Buffer.alloc(44);
+        headerBuffer.write("RIFF", 0, "ascii");
+        headerBuffer.writeUInt32LE(36 + chunkPcm.length, 4);
+        headerBuffer.write("WAVE", 8, "ascii");
+
+        headerBuffer.write("fmt ", 12, "ascii");
+        headerBuffer.writeUInt32LE(16, 16);
+        headerBuffer.writeUInt16LE(1, 20); // PCM
+        headerBuffer.writeUInt16LE(numChannels, 22);
+        headerBuffer.writeUInt32LE(sampleRate, 24);
+        headerBuffer.writeUInt32LE(sampleRate * numChannels * (bitsPerSample / 8), 28);
+        headerBuffer.writeUInt16LE(blockAlign, 32);
+        headerBuffer.writeUInt16LE(bitsPerSample, 34);
+
+        headerBuffer.write("data", 36, "ascii");
+        headerBuffer.writeUInt32LE(chunkPcm.length, 40);
+
+        const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.wav`);
+        const outFd = fs.openSync(chunkFile, "w");
+        fs.writeSync(outFd, headerBuffer);
+        fs.writeSync(outFd, chunkPcm);
+        fs.closeSync(outFd);
+
+        chunks.push(chunkFile);
+        chunkIdx++;
       }
-      
-      const chunkPcm = rawPcmData.subarray(currentOffset, currentOffset + chunkSize);
-      currentOffset += chunkSize;
-      
-      // Construct new WAV header
-      const headerBuffer = Buffer.alloc(44);
-      headerBuffer.write("RIFF", 0, "ascii");
-      headerBuffer.writeUInt32LE(36 + chunkPcm.length, 4);
-      headerBuffer.write("WAVE", 8, "ascii");
-      
-      headerBuffer.write("fmt ", 12, "ascii");
-      headerBuffer.writeUInt32LE(16, 16);
-      headerBuffer.writeUInt16LE(1, 20); // PCM
-      headerBuffer.writeUInt16LE(numChannels, 22);
-      headerBuffer.writeUInt32LE(sampleRate, 24);
-      headerBuffer.writeUInt32LE(sampleRate * numChannels * (bitsPerSample / 8), 28);
-      headerBuffer.writeUInt16LE(blockAlign, 32);
-      headerBuffer.writeUInt16LE(bitsPerSample, 34);
-      
-      headerBuffer.write("data", 36, "ascii");
-      headerBuffer.writeUInt32LE(chunkPcm.length, 40);
-      
-      const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.wav`);
-      fs.writeFileSync(chunkFile, Buffer.concat([headerBuffer, chunkPcm]));
-      chunks.push(chunkFile);
-      chunkIdx++;
+
+      return chunks;
+    } finally {
+      fs.closeSync(fd);
     }
-    
-    return chunks;
   }
 
   private splitMp3File(filePath: string, maxChunkSizeInBytes: number): string[] {
-    console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Loading file ${filePath} into memory for segmentation...`);
-    const fileBuffer = fs.readFileSync(filePath);
-    const totalBytes = fileBuffer.length;
+    const stats = fs.statSync(filePath);
+    const totalBytes = stats.size;
+    console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Splitting ${filePath} (${(totalBytes / 1024 / 1024).toFixed(2)} MB) via file stream...`);
+
+    const fd = fs.openSync(filePath, "r");
     const chunks: string[] = [];
     const tempDir = path.dirname(filePath);
     const ext = path.extname(filePath);
     const baseName = path.basename(filePath, ext);
-    
+
     let currentOffset = 0;
     let chunkIdx = 0;
-    
-    while (currentOffset < totalBytes) {
-      let targetEnd = currentOffset + maxChunkSizeInBytes;
-      if (targetEnd >= totalBytes) {
-        targetEnd = totalBytes;
-      } else {
-        // Search for the next MP3 frame sync word to split cleanly.
-        // Sync word: byte1 = 0xFF, byte2 high 3 bits set (i.e. (byte2 & 0xE0) === 0xE0)
-        let foundSync = false;
-        // Search forward up to 16KB for a sync word to avoid splitting in the middle of a frame.
-        for (let i = targetEnd; i < Math.min(targetEnd + 16384, totalBytes - 1); i++) {
-          if (fileBuffer[i] === 0xFF && (fileBuffer[i + 1] & 0xE0) === 0xE0) {
-            targetEnd = i;
-            foundSync = true;
-            break;
-          }
-        }
-        // If not found in the forward search, search backward up to 16KB
-        if (!foundSync) {
-          for (let i = targetEnd; i > Math.max(currentOffset, targetEnd - 16384); i--) {
-            if (fileBuffer[i] === 0xFF && (fileBuffer[i + 1] & 0xE0) === 0xE0) {
-              targetEnd = i;
-              foundSync = true;
+
+    try {
+      while (currentOffset < totalBytes) {
+        let targetLength = maxChunkSizeInBytes;
+        if (currentOffset + targetLength >= totalBytes) {
+          targetLength = totalBytes - currentOffset;
+        } else {
+          // Read 16KB search window around target break point to find MP3 frame sync
+          const searchBuf = Buffer.alloc(16384);
+          const searchPos = currentOffset + targetLength;
+          const bytesToRead = Math.min(16384, totalBytes - searchPos);
+          fs.readSync(fd, searchBuf, 0, bytesToRead, searchPos);
+
+          for (let i = 0; i < bytesToRead - 1; i++) {
+            if (searchBuf[i] === 0xFF && (searchBuf[i + 1] & 0xE0) === 0xE0) {
+              targetLength += i;
               break;
             }
           }
         }
+
+        const chunkBuf = Buffer.alloc(targetLength);
+        fs.readSync(fd, chunkBuf, 0, targetLength, currentOffset);
+        currentOffset += targetLength;
+
+        const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.mp3`);
+        const outFd = fs.openSync(chunkFile, "w");
+        fs.writeSync(outFd, chunkBuf);
+        fs.closeSync(outFd);
+
+        console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Written chunk ${chunkIdx}: ${chunkFile} (size: ${(chunkBuf.length / 1024 / 1024).toFixed(2)} MB)`);
+        chunks.push(chunkFile);
+        chunkIdx++;
       }
-      
-      const chunkData = fileBuffer.subarray(currentOffset, targetEnd);
-      currentOffset = targetEnd;
-      
-      const chunkFile = path.join(tempDir, `${baseName}-part-${String(chunkIdx).padStart(3, "0")}.mp3`);
-      fs.writeFileSync(chunkFile, chunkData);
-      console.log(`[AI Engine] [Vercel Logger] [MP3 Splitter] Written chunk ${chunkIdx}: ${chunkFile} (size: ${(chunkData.length / 1024 / 1024).toFixed(2)} MB)`);
-      chunks.push(chunkFile);
-      chunkIdx++;
+
+      return chunks;
+    } finally {
+      fs.closeSync(fd);
     }
-    
-    return chunks;
   }
 
   private async transcribeSingleFile(filePath: string, langOption: string): Promise<string> {

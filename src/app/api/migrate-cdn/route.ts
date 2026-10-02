@@ -29,6 +29,8 @@ export async function POST(request: NextRequest) {
       if (url === "text_journal" || url === "daily_journal" || url === "past_hours_journal" || url === "knowledge_base" || url === "settings_profile") {
         return false;
       }
+      const customTags = log.custom_tags || [];
+      if (customTags.includes("_storage:missing")) return false;
       return true;
     });
 
@@ -76,36 +78,35 @@ export async function POST(request: NextRequest) {
           throw new Error("HACK_CLUB_CDN_API_KEY is missing or invalid in environment variables (must start with 'sk_cdn_')");
         }
 
-        // Try direct upload_from_url first (bypasses local memory buffering & Cloudflare WAF body limits)
+        // Try direct upload_from_url with Supabase signed URL (bypasses local memory buffering & Cloudflare WAF body limits)
         let uploadFromUrlSuccess = false;
-        if (originalUrl.includes("supabase")) {
+        if (storagePath) {
           try {
-            const downloadAuthToken = serviceKey || anonKey;
-            const authenticatedUrl = originalUrl.replace("/object/public/", "/object/authenticated/");
-            const fromUrlHeaders: HeadersInit = {
-              Authorization: `Bearer ${cdnKey}`,
-              "Content-Type": "application/json",
-            };
-            if (downloadAuthToken) {
-              fromUrlHeaders["X-Download-Authorization"] = `Bearer ${downloadAuthToken}`;
-            }
+            const { data: signedData, error: signErr } = await adminSupabase.storage
+              .from("audio_journals")
+              .createSignedUrl(storagePath, 3600);
 
-            const fromUrlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
-              method: "POST",
-              headers: fromUrlHeaders,
-              body: JSON.stringify({ url: authenticatedUrl }),
-            });
+            if (!signErr && signedData?.signedUrl) {
+              const fromUrlRes = await fetch("https://cdn.hackclub.com/api/v4/upload_from_url", {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${cdnKey}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ url: signedData.signedUrl }),
+              });
 
-            if (fromUrlRes.ok) {
-              const cdnData = await fromUrlRes.json();
-              if (cdnData.url) {
-                newCdnUrl = cdnData.url;
-                fileSize = cdnData.size || 0;
-                uploadFromUrlSuccess = true;
+              if (fromUrlRes.ok) {
+                const cdnData = await fromUrlRes.json();
+                if (cdnData.url) {
+                  newCdnUrl = cdnData.url;
+                  fileSize = cdnData.size || 0;
+                  uploadFromUrlSuccess = true;
+                }
               }
             }
           } catch (e) {
-            console.warn(`[CDN Migration] upload_from_url failed for log ${log.id}, falling back to direct upload:`, e);
+            console.warn(`[CDN Migration] upload_from_url failed for log ${log.id}:`, e);
           }
         }
 
@@ -119,8 +120,8 @@ export async function POST(request: NextRequest) {
           }
 
           if (!audioRes.ok) {
-            if (audioRes.status === 404) {
-              console.warn(`[CDN Migration] Storage object missing for log ${log.id} (Status 404). Marking as missing.`);
+            if (audioRes.status === 404 || audioRes.status === 400) {
+              console.warn(`[CDN Migration] Storage object missing for log ${log.id} (Status ${audioRes.status}). Marking as missing.`);
               const customTags = (log.custom_tags || []).filter((t: string) => t !== "_storage:cleared");
               if (!customTags.includes("_storage:missing")) customTags.push("_storage:missing");
 
@@ -133,8 +134,8 @@ export async function POST(request: NextRequest) {
               migrationLogResults.push({
                 id: log.id,
                 title: log.ai_title || "Untitled",
-                status: "failed",
-                error: "Audio file not found in storage (404)",
+                status: "skipped",
+                error: `Audio file not found in storage (${audioRes.status})`,
               });
               continue;
             }

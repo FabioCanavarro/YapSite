@@ -46,6 +46,50 @@ export async function POST(request: NextRequest) {
 
     // 4. Determine Temp Path & MIME Type
     const audioUrl = log.audio_url;
+
+    // Check if audioUrl is missing or is a text journal marker (not a valid HTTP/HTTPS URL)
+    if (!audioUrl || typeof audioUrl !== "string" || (!audioUrl.startsWith("http://") && !audioUrl.startsWith("https://"))) {
+      console.warn(`[process-audio] Entry ${logId} is a text journal entry (audio_url: "${audioUrl}"). Re-routing to text processing engine...`);
+      
+      const rawText = log.raw_transcript || "";
+      if (rawText.trim().length > 0 && !rawText.includes("[AI Processing Error]")) {
+        try {
+          const origin = request.nextUrl.origin || "http://localhost:3000";
+          const textRes = await fetch(`${origin}/api/process-text-journal`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Cookie": request.headers.get("cookie") || "",
+            },
+            body: JSON.stringify({
+              text: rawText,
+              logId,
+              customMoods,
+              categories,
+              tags,
+            }),
+          });
+
+          if (textRes.ok) {
+            const updatedLog = await textRes.json();
+            return NextResponse.json(updatedLog, { status: 200 });
+          }
+        } catch (textErr) {
+          console.error("[process-audio] Failed to forward text entry to process-text-journal:", textErr);
+        }
+      }
+
+      await adminSupabase
+        .from("journal_logs")
+        .update({ processing_status: "completed" })
+        .eq("id", logId);
+
+      return NextResponse.json({
+        message: `Log ${logId} is a text entry. Status marked completed.`,
+        skipped: true,
+      }, { status: 200 });
+    }
+
     let mimeType = "audio/wav"; // default fallback
     
     // Parse file path from the audio URL

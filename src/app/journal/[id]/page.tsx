@@ -120,13 +120,19 @@ export default function JournalDetail({ params }: PageProps) {
   const handleRetryAnalysis = async () => {
     if (!log || isReanalyzing) return;
     setIsReanalyzing(true);
-    toast.loading("Re-analyzing audio with AI fallbacks...", { id: `retry-${log.id}` });
+    toast.loading("Re-analyzing journal entry with AI...", { id: `retry-${log.id}` });
 
     try {
-      const res = await fetch("/api/process-audio", {
+      const isTextEntry = !log.audio_url || (!log.audio_url.startsWith("http://") && !log.audio_url.startsWith("https://"));
+      const endpoint = isTextEntry ? "/api/process-text-journal" : "/api/process-audio";
+      const payload = isTextEntry
+        ? { text: log.raw_transcript, logId: log.id }
+        : { logId: log.id };
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logId: log.id }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
@@ -637,19 +643,25 @@ export default function JournalDetail({ params }: PageProps) {
     const tags = config.tags ?? { mode: "open", list: [] };
 
     try {
-      const processRes = await fetch("/api/process-audio", {
+      const isTextEntry = !log.audio_url || (!log.audio_url.startsWith("http://") && !log.audio_url.startsWith("https://"));
+      const endpoint = isTextEntry ? "/api/process-text-journal" : "/api/process-audio";
+      const payload = isTextEntry
+        ? { text: log.raw_transcript, logId: log.id, customMoods, categories, tags }
+        : {
+            logId: log.id,
+            removeFillerWords,
+            enableSwearWords,
+            customPrompt,
+            language,
+            customMoods,
+            categories,
+            tags,
+          };
+
+      const processRes = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          logId: log.id,
-          removeFillerWords,
-          enableSwearWords,
-          customPrompt,
-          language,
-          customMoods,
-          categories,
-          tags,
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (!processRes.ok) {

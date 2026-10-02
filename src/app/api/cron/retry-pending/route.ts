@@ -13,13 +13,25 @@ async function handleRetryPending(request: NextRequest) {
   try {
     const adminSupabase = createAdminClient();
 
-    // Fetch all logs with processing_status = 'pending' or 'failed'
+    // Clean up any text journal entries (e.g. audio_url = 'text_journal') stuck in pending/failed status
+    try {
+      await adminSupabase
+        .from("journal_logs")
+        .update({ processing_status: "completed" })
+        .or("processing_status.eq.pending,processing_status.eq.failed")
+        .not("audio_url", "like", "http%");
+    } catch (cleanErr) {
+      console.warn("[Cron Retry] Failed to auto-resolve non-audio pending logs:", cleanErr);
+    }
+
+    // Fetch only audio logs (audio_url starts with http) with processing_status = 'pending' or 'failed'
     const { data: pendingLogs, error: fetchErr } = await adminSupabase
       .from("journal_logs")
       .select("id, user_id, audio_url, processing_status, created_at")
       .or("processing_status.eq.pending,processing_status.eq.failed")
       .neq("processing_status", "settings_profile")
       .neq("processing_status", "knowledge_base")
+      .like("audio_url", "http%")
       .order("created_at", { ascending: false })
       .limit(20);
 
