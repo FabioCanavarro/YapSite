@@ -86,23 +86,8 @@ export function useOfflineSync(onSyncComplete?: () => void) {
           }
 
           if (!audioUrl) {
-            const { error: uploadError } = await supabase.storage
-              .from("audio_journals")
-              .upload(fileName, entry.blob, {
-                contentType: entry.mimeType,
-                duplex: "half",
-              });
-
-            if (uploadError) {
-              console.error("Offline upload error:", uploadError);
-              continue;
-            }
-
-            const { data: urlData } = supabase.storage
-              .from("audio_journals")
-              .getPublicUrl(fileName);
-
-            audioUrl = urlData.publicUrl;
+            console.warn(`[OfflineSync] Entry ${entry.id} CDN upload failed. Retrying on next sync cycle to protect Supabase quota.`);
+            continue;
           }
 
           // 3. Create Pending database record

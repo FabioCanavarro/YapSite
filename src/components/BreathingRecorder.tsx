@@ -243,7 +243,7 @@ export default function BreathingRecorder({
     const fileName = `${user.id}/${fileTimestamp}-${Math.random().toString(36).substring(7)}.${extension}`;
 
     let audioUrl = "";
-    let storageProviderTag = "_storage:hackclub_cdn";
+    const storageProviderTag = "_storage:hackclub_cdn";
 
     try {
       const cdnFormData = new FormData();
@@ -258,35 +258,19 @@ export default function BreathingRecorder({
         const cdnJson = await cdnRes.json();
         if (cdnJson.url) {
           audioUrl = cdnJson.url;
-          if (cdnJson.provider === "supabase_storage") {
-            storageProviderTag = "_storage:supabase";
-          }
         }
+      } else {
+        const errJson = await cdnRes.json().catch(() => ({}));
+        throw new Error(errJson.error || `Upload failed with status ${cdnRes.status}`);
       }
-    } catch (cdnErr) {
-      console.warn("CDN Upload API error, executing fallback:", cdnErr);
+    } catch (cdnErr: any) {
+      console.error("Hack Club CDN upload error:", cdnErr);
+      throw new Error(`Hack Club CDN upload failed: ${cdnErr?.message || cdnErr}`);
     }
 
     if (!audioUrl) {
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("audio_journals")
-        .upload(fileName, blob, {
-          contentType: mimeType,
-          duplex: "half",
-        });
-
-      if (uploadError) {
-        throw new Error(`Upload failed: ${uploadError.message}`);
-      }
-
-      const { data: urlData } = supabase.storage
-        .from("audio_journals")
-        .getPublicUrl(fileName);
-
-      audioUrl = urlData.publicUrl;
-      storageProviderTag = "_storage:supabase";
+      throw new Error("Hack Club CDN did not return an audio URL. Supabase Storage fallback is disabled to keep Supabase 100% free.");
     }
-
     const sizeTag = `_filesize:${size}`;
     const customTags = [sizeTag, storageProviderTag];
 

@@ -267,6 +267,12 @@ export default function Dashboard() {
 
   // Check user session on mount
   useEffect(() => {
+    // If Supabase redirected to root /?code=..., forward to /auth/callback to complete session exchange
+    if (typeof window !== "undefined" && window.location.search.includes("code=")) {
+      window.location.href = `/auth/callback${window.location.search}`;
+      return;
+    }
+
     async function checkAuth() {
       const supabase = createClient();
       const { data: { session } } = await supabase.auth.getSession();

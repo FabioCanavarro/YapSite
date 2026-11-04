@@ -87,23 +87,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!audioUrl) {
-      const { data: uploadData, error: uploadError } = await adminSupabase.storage
-        .from("audio_journals")
-        .upload(fileName, buffer, {
-          contentType: mimeType,
-          duplex: "half",
-        });
-
-      if (uploadError) {
-        console.error("Storage upload error:", uploadError);
-        return NextResponse.json({ error: `Storage upload failed: ${uploadError.message}` }, { status: 500 });
-      }
-
-      const { data: urlData } = adminSupabase.storage
-        .from("audio_journals")
-        .getPublicUrl(fileName);
-
-      audioUrl = urlData.publicUrl;
+      return NextResponse.json({ error: "Failed to upload audio to Hack Club CDN. Supabase storage fallback is disabled to keep Supabase quota 100% free." }, { status: 502 });
     }
 
     // 5. Create Pending Database Row
