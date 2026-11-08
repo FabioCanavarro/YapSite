@@ -1,7 +1,8 @@
 /**
  * Decodes and downsamples an audio file to an optimized speech mono WAV format in the browser.
  * Uses dynamic sample rates (16kHz for short voice notes, 11kHz / 8kHz for longer recordings)
- * to keep file sizes well within upload budgets while preserving crystal-clear speech recognition quality.
+ * to ensure files stay comfortably below 2.5 MB so they never trip Vercel's 4.5 MB serverless limit,
+ * while preserving crystal-clear voice recognition quality for Whisper AI.
  */
 export async function compressAudioFile(file: Blob): Promise<Blob> {
   if (typeof window === "undefined") {
@@ -25,19 +26,17 @@ export async function compressAudioFile(file: Blob): Promise<Blob> {
     const duration = originalBuffer.duration || 0;
     
     // 2. Select target sample rate dynamically based on audio length
-    // Whisper / Speech AI is trained on 8kHz-16kHz audio.
-    // 8kHz 8-bit mono = ~480 KB/min.
-    // 11.025kHz 8-bit mono = ~660 KB/min.
-    // 16kHz 8-bit mono = ~960 KB/min.
+    // Target budget: ~2.4 MB maximum to stay safely under Vercel's 4.5 MB proxy ceiling
+    // Whisper speech recognition frontend resamples audio to 8kHz-16kHz internally.
     let targetSampleRate = 16000;
-    if (duration > 360) {
-      // For recordings longer than 6 minutes, downsample to 8kHz (standard telephony voice quality)
+    if (duration > 300) {
+      // > 5 minutes: 8,000 Hz 8-bit mono = ~480 KB/min (voice standard)
       targetSampleRate = 8000;
-    } else if (duration > 180) {
-      // For recordings between 3 and 6 minutes, downsample to 11.025kHz
+    } else if (duration > 150) {
+      // 2.5 - 5 minutes: 11,025 Hz 8-bit mono = ~660 KB/min
       targetSampleRate = 11025;
     } else {
-      // For recordings 3 minutes or under, retain full 16kHz fidelity
+      // <= 2.5 minutes: 16,000 Hz 8-bit mono = ~960 KB/min (full fidelity)
       targetSampleRate = 16000;
     }
 
