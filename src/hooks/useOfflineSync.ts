@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { getOfflineJournals, deleteOfflineJournal } from "@/utils/indexedDb";
+import { uploadAudioToCdn } from "@/utils/cdnUpload";
 
 export function useOfflineSync(onSyncComplete?: () => void) {
   const [isOnline, setIsOnline] = useState(true);
@@ -67,26 +68,19 @@ export function useOfflineSync(onSyncComplete?: () => void) {
 
           let audioUrl = "";
           try {
-            const cdnFormData = new FormData();
-            cdnFormData.append("file", entry.blob, `sync-${Date.now()}.${extension}`);
-
-            const cdnRes = await fetch("/api/cdn-upload", {
-              method: "POST",
-              body: cdnFormData,
-            });
-
-            if (cdnRes.ok) {
-              const cdnJson = await cdnRes.json();
-              if (cdnJson.url) {
-                audioUrl = cdnJson.url;
-              }
-            }
+            const cdnResult = await uploadAudioToCdn(
+              entry.blob,
+              `sync-${Date.now()}.${extension}`,
+              entry.mimeType,
+              supabase
+            );
+            audioUrl = cdnResult.url;
           } catch (cdnErr) {
-            console.warn("CDN upload failed during offline sync, falling back:", cdnErr);
+            console.warn("CDN upload failed during offline sync:", cdnErr);
           }
 
           if (!audioUrl) {
-            console.warn(`[OfflineSync] Entry ${entry.id} CDN upload failed. Retrying on next sync cycle to protect Supabase quota.`);
+            console.warn(`[OfflineSync] Entry ${entry.id} CDN upload failed. Retrying on next sync cycle.`);
             continue;
           }
 

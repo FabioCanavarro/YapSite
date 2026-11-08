@@ -1,31 +1,54 @@
 /**
- * Decodes and downsamples an audio file to 16kHz mono WAV format in the browser.
- * This yields high-fidelity speech quality while reducing file sizes by 6x to 12x.
+ * Decodes and downsamples an audio file to an optimized speech mono WAV format in the browser.
+ * Uses dynamic sample rates (16kHz for short voice notes, 11kHz / 8kHz for longer recordings)
+ * to keep file sizes well within upload budgets while preserving crystal-clear speech recognition quality.
  */
 export async function compressAudioFile(file: Blob): Promise<Blob> {
   if (typeof window === "undefined") {
     return file;
   }
 
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) {
+    return file;
+  }
+
+  let audioCtx: AudioContext | null = null;
+
   try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    const audioCtx = new AudioContextClass();
+    audioCtx = new AudioContextClass();
     
-    // 1. ArrayBuffer load and decode
+    // 1. ArrayBuffer load and decode (slice(0) prevents detached buffer issues on mobile WebKit/Chrome)
     const arrayBuffer = await file.arrayBuffer();
-    const originalBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const originalBuffer = await audioCtx.decodeAudioData(arrayBuffer.slice(0));
     
-    // Configure downsampling values
-    const TARGET_SAMPLE_RATE = 16000; // 16kHz is ideal for voice AI
-    const TARGET_CHANNELS = 1;        // Mono
+    const duration = originalBuffer.duration || 0;
     
-    const targetLength = Math.floor(originalBuffer.duration * TARGET_SAMPLE_RATE);
+    // 2. Select target sample rate dynamically based on audio length
+    // Whisper / Speech AI is trained on 8kHz-16kHz audio.
+    // 8kHz 8-bit mono = ~480 KB/min.
+    // 11.025kHz 8-bit mono = ~660 KB/min.
+    // 16kHz 8-bit mono = ~960 KB/min.
+    let targetSampleRate = 16000;
+    if (duration > 360) {
+      // For recordings longer than 6 minutes, downsample to 8kHz (standard telephony voice quality)
+      targetSampleRate = 8000;
+    } else if (duration > 180) {
+      // For recordings between 3 and 6 minutes, downsample to 11.025kHz
+      targetSampleRate = 11025;
+    } else {
+      // For recordings 3 minutes or under, retain full 16kHz fidelity
+      targetSampleRate = 16000;
+    }
+
+    const TARGET_CHANNELS = 1; // Mono
+    const targetLength = Math.max(1, Math.floor(duration * targetSampleRate));
     
-    // 2. Offline audio context render
+    // 3. Offline audio context render
     const offlineCtx = new OfflineAudioContext(
       TARGET_CHANNELS,
       targetLength,
-      TARGET_SAMPLE_RATE
+      targetSampleRate
     );
     
     const sourceNode = offlineCtx.createBufferSource();
@@ -35,11 +58,21 @@ export async function compressAudioFile(file: Blob): Promise<Blob> {
     
     const renderedBuffer = await offlineCtx.startRendering();
     
-    // 3. Encode AudioBuffer to WAV format
-    return audioBufferToWav(renderedBuffer);
+    // 4. Encode AudioBuffer to unsigned 8-bit PCM WAV format
+    const compressedWav = audioBufferToWav(renderedBuffer);
+    console.log(
+      `[AudioCompressor] Downsampled ${(file.size / 1024 / 1024).toFixed(2)} MB -> ${(compressedWav.size / 1024 / 1024).toFixed(2)} MB (${targetSampleRate}Hz 8-bit mono, duration: ${duration.toFixed(1)}s)`
+    );
+    return compressedWav;
   } catch (err) {
-    console.error("Client-side audio compression failed, returning original file:", err);
+    console.warn("Client-side audio compression failed, returning original file:", err);
     return file;
+  } finally {
+    if (audioCtx) {
+      try {
+        await audioCtx.close();
+      } catch {}
+    }
   }
 }
 

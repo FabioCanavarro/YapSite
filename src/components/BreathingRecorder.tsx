@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { saveOfflineJournal } from "@/utils/indexedDb";
 import { compressAudioFile } from "@/utils/audioCompressor";
+import { uploadAudioToCdn } from "@/utils/cdnUpload";
 
 interface QueueItem {
   name: string;
@@ -246,30 +247,20 @@ export default function BreathingRecorder({
     const storageProviderTag = "_storage:hackclub_cdn";
 
     try {
-      const cdnFormData = new FormData();
-      cdnFormData.append("file", blob, `audio-${fileTimestamp}.${extension}`);
-
-      const cdnRes = await fetch("/api/cdn-upload", {
-        method: "POST",
-        body: cdnFormData,
-      });
-
-      if (cdnRes.ok) {
-        const cdnJson = await cdnRes.json();
-        if (cdnJson.url) {
-          audioUrl = cdnJson.url;
-        }
-      } else {
-        const errJson = await cdnRes.json().catch(() => ({}));
-        throw new Error(errJson.error || `Upload failed with status ${cdnRes.status}`);
-      }
+      const cdnResult = await uploadAudioToCdn(
+        blob,
+        `audio-${fileTimestamp}.${extension}`,
+        mimeType,
+        supabase
+      );
+      audioUrl = cdnResult.url;
     } catch (cdnErr: any) {
       console.error("Hack Club CDN upload error:", cdnErr);
       throw new Error(`Hack Club CDN upload failed: ${cdnErr?.message || cdnErr}`);
     }
 
     if (!audioUrl) {
-      throw new Error("Hack Club CDN did not return an audio URL. Supabase Storage fallback is disabled to keep Supabase 100% free.");
+      throw new Error("Hack Club CDN did not return an audio URL. Please try again.");
     }
     const sizeTag = `_filesize:${size}`;
     const customTags = [sizeTag, storageProviderTag];
@@ -442,20 +433,7 @@ export default function BreathingRecorder({
         console.error("Queue item upload failed:", err);
         updateQueueItemStatus(i, 'failed');
         const errMsg = err.message || String(err);
-        if (
-          errMsg.toLowerCase().includes("size") || 
-          errMsg.toLowerCase().includes("large") || 
-          errMsg.toLowerCase().includes("exceeds") || 
-          errMsg.toLowerCase().includes("entity too large") || 
-          errMsg.toLowerCase().includes("413")
-        ) {
-          toast.error(
-            `Failed to upload ${file.name}: ${errMsg}. (Tip: Increase the 'Maximum File Size' limit in your Supabase Dashboard under Storage -> audio_journals -> Bucket Settings, or run the storage SQL update schema.)`, 
-            { duration: 10000 }
-          );
-        } else {
-          toast.error(`Failed to upload ${file.name}: ${errMsg}`);
-        }
+        toast.error(`Failed to upload ${file.name}: ${errMsg}`, { duration: 8000 });
       }
     }
 
